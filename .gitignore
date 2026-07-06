@@ -1,0 +1,45 @@
+# Playwright MCP debug output
+.playwright-mcp/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Development scratch / reference art (not used by the game)
+reference*.png
+reference*.jpg
+reference*.webp
+scene_A.png
+scene_B.png
+scene_final.png
+scene_sample*.png
+title_A_gold.png
+title_B_red-gold.png
+title_t2.png
+title_t3.png
+title_final.png
+logo_kickwin_gemini.png
+logo_kickwin_source.png
+KICK&WIN-GEMINI.png
+keeper_sample.png
+bg*.png
+rb*.png
+rc*.png
+rd*.png
+
+# Root-level duplicates/exports (game loads from assets/ and flags/ instead)
+country_select.png
+feedback_goal.png
+feedback_saved.png
+hud.png
+k_topright.png
+logo_kickwin_final.png
+result_1of3.png
+result_2of3.png
+result_3of3.png
+title_background.png
+vs_reveal.png
+
+# OS files
+.DS_Store
+Thumbs.db

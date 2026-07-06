@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KICK &amp; WIN — RevoU</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #060a1e;
+    overflow: hidden;
+    font-family: 'Arial Black', Arial, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  #wrap {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas#game {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #060a1e;
+    cursor: pointer;
+  }
+
+  /* ---------- Loading ---------- */
+  #loader {
+    position: fixed; inset: 0; z-index: 40;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #0b1230; color: #FFDE3D;
+    font-size: 5vmin; letter-spacing: 2px; text-align: center;
+  }
+  #loader .bar { margin-top: 3vmin; width: 40vmin; height: 2.4vmin; border: 3px solid #FFDE3D; border-radius: 99px; overflow: hidden; }
+  #loader .fill { height: 100%; width: 0%; background: #FFDE3D; transition: width .15s; }
+
+  /* ---------- Mobile landscape gate ---------- */
+  #rotate {
+    position: fixed; inset: 0; z-index: 50;
+    display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(6, 10, 30, 0.96);
+    backdrop-filter: blur(6px);
+    color: #FFDE3D; text-align: center; padding: 6vmin;
+  }
+  #rotate.show { display: flex; }
+  .phone {
+    width: 30vmin; height: 30vmin;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 5vmin;
+  }
+  .phone svg { width: 100%; height: 100%; animation: rot 2.2s ease-in-out infinite; transform-origin: 50% 50%; }
+  @keyframes rot {
+    0%, 18%   { transform: rotate(0deg); }
+    42%, 78%  { transform: rotate(-90deg); }
+    100%      { transform: rotate(0deg); }
+  }
+  #rotate h1 {
+    font-size: 7vmin; color: #FFDE3D;
+    text-shadow: 3px 3px 0 #141D45, -1px -1px 0 #141D45;
+    letter-spacing: 2px;
+  }
+  #rotate p {
+    font-size: 4vmin; color: #fff; margin-top: 2vmin; font-weight: bold;
+    text-shadow: 2px 2px 0 #141D45;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="2148" height="1198"></canvas>
+</div>
+
+<div id="loader">
+  <div>KICK &amp; WIN</div>
+  <div class="bar"><div class="fill" id="loadfill"></div></div>
+</div>
+
+<div id="rotate">
+  <div class="phone">
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="34" y="14" width="32" height="60" rx="6" fill="none" stroke="#FFDE3D" stroke-width="4"/>
+      <rect x="42" y="22" width="16" height="40" fill="#141D45" stroke="#FFDE3D" stroke-width="2"/>
+      <circle cx="50" cy="68" r="2.4" fill="#FFDE3D"/>
+      <!-- curved rotate arrow -->
+      <path d="M20 86 A34 34 0 0 1 80 86" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="4 4"/>
+      <path d="M80 86 l-2 -8 l8 3 z" fill="#fff"/>
+    </svg>
+  </div>
+  <h1>PUTAR HP KAMU</h1>
+  <p>Mainkan dalam mode landscape</p>
+</div>
+
+<script>
+"use strict";
+(function () {
+
+/* ============================================================
+   CONSTANTS & GEOMETRY  (native canvas 2148 x 1198)
+   All fractions copied from build_scripts/hud.py & cs_new.py
+   ============================================================ */
+const CW = 2148, CH = 1198;
+const YELLOW = "#FFDE3D", NAVY = "#141D45", NAVY_D = "#0b1230", WHITE = "#ffffff";
+const GREEN = "#3cd25a", RED = "#e83c3c";
+
+// goal mouth
+const GX0 = CW * 0.285, GX1 = CW * 0.715;
+const GY0 = CH * 0.44,  GY1 = CH * 0.70;
+const AIM_R = (GX1 - GX0) * 0.055;
+const COL_FX = [0.15, 0.5, 0.85];      // within mouth
+const ROW_FY = [0.24, 0.76];
+// build the 6 aim zones (index 0..5 = row0 c0,c1,c2 then row1 c0,c1,c2)
+const ZONES = [];
+for (let ri = 0; ri < ROW_FY.length; ri++)
+  for (let ci = 0; ci < COL_FX.length; ci++)
+    ZONES.push({
+      col: ci, row: ri,
+      x: GX0 + (GX1 - GX0) * COL_FX[ci],
+      y: GY0 + (GY1 - GY0) * ROW_FY[ri],
+    });
+
+// power bar
+const PB_W = 58, PB_X = CW - 120, PB_Y0 = CH * 0.30, PB_Y1 = CH * 0.82;
+
+// scoreboard
+const SB_R = 34, SB_GAP = 130, SB_CY = 78;
+
+// ball on the spot / keeper feet
+const BALL_X = CW * 0.50, BALL_Y = CH * 0.923, BALL_R = CW * 0.033 / 2;
+const KEEP_X = CW * 0.50, KEEP_FEET_Y = CH * 0.808;
+
+/* ============================================================
+   COUNTRY DATA + country-select grid geometry (from cs_new.py,
+   canvas 1344x768 -> we scale hotspots to CW x CH)
+   ============================================================ */
+const COUNTRIES = [
+  "norway","england","france","morocco","argentina","usa",
+  "portugal","spain","belgium","switzerland","colombia","egypt"
+];
+const CNAME = {
+  norway:"NORWAY", england:"ENGLAND", france:"FRANCE", morocco:"MOROCCO",
+  argentina:"ARGENTINA", usa:"USA", portugal:"PORTUGAL", spain:"SPAIN",
+  belgium:"BELGIUM", switzerland:"SWITZERLAND", colombia:"COLOMBIA", egypt:"EGYPT"
+};
+
+// Recompute the exact grid rects that cs_new.py drew (in 1344x768 space).
+function computeSelectGrid() {
+  const W = 1344, H = 768;
+  const cols = 4, rows = 3;
+  const grid_top = 118, grid_bottom = H - 62;
+  const gutter = 40, name_h = 34, gap_y = 34, scale = 0.86;
+  const grid_h = grid_bottom - grid_top;
+  const side_margin = Math.floor(W * 0.05);
+  const tile_h_max = Math.floor((grid_h - (rows - 1) * gap_y) / rows);
+  let flag_h = tile_h_max - name_h;
+  const flag_w_fit = Math.floor((W - 2 * side_margin - (cols - 1) * gutter) / cols);
+  flag_h = Math.floor(Math.min(flag_h, Math.floor(flag_w_fit * 2 / 3)) * scale);
+  const tile_w = Math.floor(flag_h * 3 / 2);
+  const tile_h = flag_h + name_h;
+  const row_w = cols * tile_w + (cols - 1) * gutter;
+  const start_x = Math.floor((W - row_w) / 2);
+  const start_y = grid_top + Math.floor((grid_h - (rows * tile_h + (rows - 1) * gap_y)) / 2);
+  const rects = [];
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const tx = start_x + c * (tile_w + gutter);
+    const ty = start_y + r * (tile_h + gap_y);
+    // scale from 1344x768 to CW x CH (the backdrop is drawn to fill the canvas)
+    rects.push({
+      country: COUNTRIES[i],
+      x: tx / W * CW, y: ty / H * CH,
+      w: tile_w / W * CW, h: tile_h / H * CH,
+    });
+  }
+  return rects;
+}
+const SELECT_RECTS = computeSelectGrid();
+
+/* ============================================================
+   ASSET LOADING
+   ============================================================ */
+const IMG = {};
+const ASSET_LIST = {
+  title_bg:   "assets/title_background.png",
+  logo:       "assets/logo_kickwin_final.png",
+  revou:      "assets/revou-logo.png",
+  select:     "assets/country_select.png",
+  stadium:    "assets/stadium_empty.png",
+  scene:      "assets/scene_clean.png",
+  ball:       "assets/ball.png",
+  result1:    "assets/result_1of3.png",
+  result2:    "assets/result_2of3.png",
+  result3:    "assets/result_3of3.png",
+  k_idle:     "assets/keeper/idle.png",
+  k_left:     "assets/keeper/dive_left.png",
+  k_right:    "assets/keeper/dive_right.png",
+  k_jump:     "assets/keeper/jump.png",
+};
+COUNTRIES.forEach(c => ASSET_LIST["flag_" + c] = "assets/flags/f_" + c + ".png");
+
+function loadAssets(onDone) {
+  const keys = Object.keys(ASSET_LIST);
+  let loaded = 0;
+  const fill = document.getElementById("loadfill");
+  keys.forEach(k => {
+    const im = new Image();
+    im.onload = im.onerror = () => {
+      loaded++;
+      fill.style.width = (loaded / keys.length * 100) + "%";
+      if (loaded === keys.length) onDone();
+    };
+    im.src = ASSET_LIST[k];
+    IMG[k] = im;
+  });
+}
+
+/* ============================================================
+   AUDIO — synth SFX (Web Audio API)
+   ============================================================ */
+let AC = null;
+function audio() {
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (AC && AC.state === "suspended") AC.resume();
+  return AC;
+}
+function tone(freq, dur, type = "square", vol = 0.2, slideTo = null) {
+  const ac = audio(); if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, ac.currentTime);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, ac.currentTime + dur);
+  g.gain.setValueAtTime(vol, ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(); o.stop(ac.currentTime + dur);
+}
+function noise(dur, vol = 0.25, filterFreq = 1000, sweepTo = null) {
+  const ac = audio(); if (!ac) return;
+  const n = Math.floor(ac.sampleRate * dur);
+  const buf = ac.createBuffer(1, n, ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const flt = ac.createBiquadFilter(); flt.type = "bandpass";
+  flt.frequency.setValueAtTime(filterFreq, ac.currentTime);
+  if (sweepTo) flt.frequency.exponentialRampToValueAtTime(sweepTo, ac.currentTime + dur);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(vol, ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+  src.connect(flt); flt.connect(g); g.connect(ac.destination);
+  src.start(); src.stop(ac.currentTime + dur);
+}
+const SFX = {
+  click:  () => tone(520, 0.07, "square", 0.15),
+  kick:   () => { tone(180, 0.1, "square", 0.3, 90); noise(0.08, 0.2, 800); },
+  whoosh: () => noise(0.35, 0.15, 400, 2200),
+  goal:   () => { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>tone(f,0.18,"square",0.22),i*70)); setTimeout(()=>noise(0.5,0.15,1500),120); },
+  save:   () => { tone(150, 0.25, "sawtooth", 0.3, 60); noise(0.12, 0.15, 300); },
+};
+
+/* ============================================================
+   GAME STATE
+   ============================================================ */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+const G = {
+  screen: "title",         // title|select|vs|aim|power|shooting|feedback|result
+  shooter: null,
+  rival: null,
+  shot: 0,                 // 0..2 (current shot index)
+  results: [null, null, null], // 'goal'|'save' per shot
+  score: 0,
+  schedule: [],            // precomputed booleans (true=goal)
+  target: 1,
+  replayed: false,         // one-time replay used?
+  // interaction
+  hoverZone: -1,
+  chosenZone: -1,
+  power: 0,                // locked power 0..1
+  // animation timers
+  t: 0,                    // ms accumulator for current state
+  // ball
+  ball: { x: BALL_X, y: BALL_Y, tx: BALL_X, ty: BALL_Y, active: false, spin: 0 },
+  // keeper
+  keeper: { pose: "idle", dir: 0, anim: 0 }, // dir -1 left, 0 center, 1 right
+  // fx
+  particles: [],
+  shake: 0,
+  netRipple: 0,
+  fbType: null,            // 'goal'|'save' during feedback
+};
+
+function weightedTarget() {
+  const r = Math.random();
+  if (r < 0.50) return 1;
+  if (r < 0.80) return 2;
+  return 3;
+}
+function buildSchedule(target) {
+  // choose which of the 3 shots are goals so sum == target, >=1 always
+  const idx = [0, 1, 2];
+  // shuffle
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [idx[i], idx[j]] = [idx[j], idx[i]];
+  }
+  const goalShots = new Set(idx.slice(0, target));
+  return [0, 1, 2].map(i => goalShots.has(i));
+}
+function startNewGame() {
+  G.shot = 0; G.results = [null, null, null]; G.score = 0;
+  G.target = weightedTarget();
+  G.schedule = buildSchedule(G.target);
+  if (window.__forceAll === "save") G.schedule = [false, false, false];  // debug
+  if (window.__forceAll === "goal") { G.schedule = [true, true, true]; G.target = 3; } // debug
+  G.chosenZone = -1; G.hoverZone = -1; G.power = 0;
+  G.particles = []; G.shake = 0; G.netRipple = 0;
+}
+function assignRival() {
+  const others = COUNTRIES.filter(c => c !== G.shooter);
+  G.rival = others[Math.floor(Math.random() * others.length)];
+}
+
+// expose engine for statistical verification
+window.__rigTest = function (n) {
+  const dist = { 1: 0, 2: 0, 3: 0 }; let minScore = 99;
+  for (let i = 0; i < n; i++) {
+    const t = weightedTarget();
+    const sched = buildSchedule(t);
+    const s = sched.filter(Boolean).length;
+    dist[s] = (dist[s] || 0) + 1;
+    minScore = Math.min(minScore, s);
+  }
+  return { n, dist, minScore, pct: { 1: dist[1]/n, 2: dist[2]/n, 3: dist[3]/n } };
+};
+
+function setScreen(s) { G.screen = s; G.t = 0; }
+
+/* ============================================================
+   DRAW HELPERS
+   ============================================================ */
+function drawImageFill(im, dx, dy, dw, dh) {
+  // draw image to fill (cover) the target rect, preserving aspect
+  if (!im.width) return;
+  ctx.drawImage(im, dx, dy, dw, dh);
+}
+function outlineText(txt, x, y, size, fill, ow, oc, align = "center", baseline = "middle") {
+  ctx.font = "900 " + size + "px 'Arial Black', Arial, sans-serif";
+  ctx.textAlign = align; ctx.textBaseline = baseline;
+  ctx.fillStyle = oc || NAVY;
+  for (let dx = -ow; dx <= ow; dx++)
+    for (let dy = -ow; dy <= ow; dy++)
+      if (dx*dx + dy*dy <= ow*ow) ctx.fillText(txt, x + dx, y + dy);
+  ctx.fillStyle = fill;
+  ctx.fillText(txt, x, y);
+}
+
+/* ============================================================
+   SCREEN RENDERERS
+   ============================================================ */
+function drawTitle(dt) {
+  drawImageFill(IMG.title_bg, 0, 0, CW, CH);
+  // blinking "CLICK TO START" is baked into the mockup title_final, but title_background
+  // has no text -> draw the logo + prompt in code.
+  // logo (781x174) centered top
+  const lw = CW * 0.62, lh = lw * (IMG.logo.height / IMG.logo.width);
+  ctx.drawImage(IMG.logo, (CW - lw) / 2, CH * 0.06, lw, lh);
+  // blinking prompt
+  const blink = (Math.floor(G.t / 500) % 2) === 0;
+  if (blink) {
+    const bw = CW * 0.30, bh = CH * 0.075, bx = (CW - bw) / 2, by = CH * 0.86;
+    ctx.fillStyle = "rgba(10,16,40,0.85)";
+    roundRect(bx, by, bw, bh, 12); ctx.fill();
+    outlineText("CLICK TO START", CW / 2, by + bh / 2 + 4, 52, WHITE, 3, NAVY);
+  }
+  scanlines();
+}
+
+function drawSelect() {
+  drawImageFill(IMG.select, 0, 0, CW, CH);
+  // hover highlight on grid cells
+  if (G.hoverRect) {
+    const r = G.hoverRect;
+    ctx.save();
+    ctx.strokeStyle = YELLOW; ctx.lineWidth = 8;
+    ctx.shadowColor = YELLOW; ctx.shadowBlur = 30;
+    ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+    ctx.restore();
+  }
+  scanlines();
+}
+
+function drawFlagInBox(country, x, y, w, h) {
+  const im = IMG["flag_" + country];
+  if (!im || !im.width) return;
+  // contain-fit whole flag, navy behind
+  ctx.fillStyle = NAVY; ctx.fillRect(x, y, w, h);
+  const sc = Math.min(w / im.width, h / im.height);
+  const nw = im.width * sc, nh = im.height * sc;
+  ctx.drawImage(im, x + (w - nw) / 2, y + (h - nh) / 2, nw, nh);
+  // gold keyline
+  ctx.strokeStyle = YELLOW; ctx.lineWidth = 6;
+  ctx.strokeRect(x, y, w, h);
+}
+
+function drawVS() {
+  // dimmed empty-stadium backdrop (NOT the country grid)
+  drawImageFill(IMG.stadium, 0, 0, CW, CH);
+  ctx.fillStyle = "rgba(6,10,30,0.72)"; ctx.fillRect(0, 0, CW, CH);
+  // diagonal blue/red split accents
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = "#2f6fd0";
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(CW*0.58,0); ctx.lineTo(CW*0.42,CH); ctx.lineTo(0,CH); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#b02a2a";
+  ctx.beginPath(); ctx.moveTo(CW,0); ctx.lineTo(CW*0.58,0); ctx.lineTo(CW*0.42,CH); ctx.lineTo(CW,CH); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  outlineText("GET READY!", CW/2, CH*0.11, 96, YELLOW, 5, NAVY);
+
+  const fw = CW * 0.28, fh = fw * 2/3;
+  const fy = CH * 0.30;
+  const lx = CW * 0.10, rx = CW * 0.62;
+  outlineText("KAMU", lx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  outlineText("RIVAL KEEPER", rx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  drawFlagInBox(G.shooter, lx, fy, fw, fh);
+  drawFlagInBox(G.rival,  rx, fy, fw, fh);
+  outlineText(CNAME[G.shooter], lx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  outlineText(CNAME[G.rival],  rx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+
+  // VS badge center
+  const bx = CW/2, by = fy + fh/2, br = CW*0.055;
+  ctx.save();
+  ctx.shadowColor = YELLOW; ctx.shadowBlur = 40;
+  ctx.fillStyle = NAVY; ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = YELLOW; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.stroke();
+  outlineText("VS", bx, by + 4, 72, YELLOW, 3, NAVY);
+
+  outlineText("Cetak 3 gol untuk memenangkan hadiah terbaik!", CW/2, CH*0.80, 40, WHITE, 3, NAVY);
+  const blink = (Math.floor(G.t / 500) % 2) === 0;
+  if (blink) outlineText("TAP TO KICK OFF", CW/2, CH*0.90, 56, YELLOW, 4, NAVY);
+  scanlines();
+}
+
+// ---- in-game scene ----
+function drawScene() {
+  // screen shake offset
+  let sx = 0, sy = 0;
+  if (G.shake > 0) { sx = (Math.random()-0.5) * G.shake; sy = (Math.random()-0.5) * G.shake; }
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  drawImageFill(IMG.scene, 0, 0, CW, CH);
+
+  // net ripple flash on goal
+  if (G.netRipple > 0) {
+    ctx.save();
+    ctx.globalAlpha = G.netRipple * 0.25;
+    ctx.fillStyle = WHITE;
+    ctx.fillRect(GX0, GY0 - CH*0.1, GX1 - GX0, (GY1 - GY0) + CH*0.15);
+    ctx.restore();
+  }
+
+  drawKeeper();
+  drawBall();
+  drawParticles();
+
+  // HUD overlays depend on sub-state
+  drawScoreboard();
+  if (G.screen === "aim" || G.screen === "power") {
+    drawAimZones();
+    drawPowerBar();
+    drawGuide();
+  }
+  ctx.restore();
+  scanlines();
+}
+
+// Single-line guide, no frame — shows ONLY the current step's instruction.
+function drawGuide() {
+  const txt = G.screen === "aim"
+    ? "PILIH TARGET, LALU KLIK"
+    : "ATUR POWER — KLIK / SPASI";
+  outlineText(txt, CW / 2, CH - 40, 42, YELLOW, 4, NAVY);
+}
+
+function drawScoreboard() {
+  const cx0 = CW/2 - SB_GAP;
+  for (let i = 0; i < 3; i++) {
+    const cx = cx0 + i * SB_GAP, cy = SB_CY;
+    let st = "pending";
+    if (G.results[i] === "goal") st = "goal";
+    else if (G.results[i] === "save") st = "save";
+    ballDot(cx, cy, SB_R, st);
+  }
+}
+function ballDot(cx, cy, r, state) {
+  ctx.fillStyle = "rgba(10,16,40,0.7)";
+  ctx.beginPath(); ctx.arc(cx, cy, r + 8, 0, 7); ctx.fill();
+  ctx.fillStyle = state === "pending" ? "rgba(230,230,235,1)" : "rgba(245,245,248,1)";
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  ctx.fillStyle = "#282c3c";
+  ctx.beginPath(); ctx.arc(cx, cy, r*0.33, 0, 7); ctx.fill();
+  if (state === "goal") {
+    ctx.strokeStyle = GREEN; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.arc(cx, cy, r+3, 0, 7); ctx.stroke();
+    ctx.lineWidth = 11; ctx.beginPath();
+    ctx.moveTo(cx - r*0.45, cy+2); ctx.lineTo(cx - r*0.08, cy + r*0.42); ctx.lineTo(cx + r*0.5, cy - r*0.42); ctx.stroke();
+  } else if (state === "save") {
+    ctx.strokeStyle = RED; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.arc(cx, cy, r+3, 0, 7); ctx.stroke();
+    const o = r*0.42; ctx.lineWidth = 11; ctx.beginPath();
+    ctx.moveTo(cx-o, cy-o); ctx.lineTo(cx+o, cy+o); ctx.moveTo(cx-o, cy+o); ctx.lineTo(cx+o, cy-o); ctx.stroke();
+  }
+}
+
+function drawAimZones() {
+  for (let i = 0; i < ZONES.length; i++) {
+    const z = ZONES[i];
+    const hover = i === G.hoverZone;
+    if (hover) {
+      ctx.save();
+      ctx.shadowColor = YELLOW; ctx.shadowBlur = 40;
+      ctx.strokeStyle = YELLOW; ctx.lineWidth = 12;
+      ctx.beginPath(); ctx.arc(z.x, z.y, AIM_R, 0, 7); ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(z.x, z.y, AIM_R - 14, 0, 7); ctx.stroke();
+      ctx.fillStyle = YELLOW;
+      ctx.beginPath(); ctx.arc(z.x, z.y, 8, 0, 7); ctx.fill();
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.arc(z.x, z.y, AIM_R, 0, 7); ctx.stroke();
+    }
+  }
+}
+
+let powerPhase = 0;
+function drawPowerBar() {
+  // frame
+  ctx.fillStyle = "rgba(10,16,40,0.8)";
+  roundRect(PB_X - 10, PB_Y0 - 46, PB_W + 20, (PB_Y1 - PB_Y0) + 62, 18); ctx.fill();
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+  roundRect(PB_X - 10, PB_Y0 - 46, PB_W + 20, (PB_Y1 - PB_Y0) + 62, 18); ctx.stroke();
+  outlineText("PWR", PB_X + PB_W/2, PB_Y0 - 24, 34, YELLOW, 3, NAVY);
+  // gradient fill green(bottom)->yellow->red(top)
+  const grad = ctx.createLinearGradient(0, PB_Y1, 0, PB_Y0);
+  grad.addColorStop(0, "#3cd25a"); grad.addColorStop(0.5, "#ffde3d"); grad.addColorStop(1, "#e83c3c");
+  ctx.fillStyle = grad;
+  ctx.fillRect(PB_X, PB_Y0, PB_W, PB_Y1 - PB_Y0);
+  // oscillating marker (only while aiming/power sub-state)
+  let p = G.chosenZone >= 0 ? oscValue() : oscValue();
+  const my = PB_Y1 - (PB_Y1 - PB_Y0) * p;
+  ctx.fillStyle = WHITE;
+  ctx.fillRect(PB_X - 16, my - 9, PB_W + 32, 18);
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 4;
+  ctx.strokeRect(PB_X - 16, my - 9, PB_W + 32, 18);
+  ctx.fillStyle = YELLOW;
+  ctx.beginPath();
+  ctx.moveTo(PB_X - 16, my - 16); ctx.lineTo(PB_X - 40, my); ctx.lineTo(PB_X - 16, my + 16);
+  ctx.closePath(); ctx.fill();
+}
+function oscValue() {
+  // 0..1 sine, ~1.5 Hz, only advances during aim/power
+  return 0.5 + 0.5 * Math.sin(powerPhase);
+}
+
+// AI keeper sprites (trimmed to content bbox -> bottom = feet)
+const KEEP_IDLE_H = CH * 0.255;   // idle sprite height on screen (matches baked scale)
+function spriteWH(im, targetH) {
+  const sc = targetH / im.height;
+  return { w: im.width * sc, h: targetH };
+}
+function drawKeeperSprite(im, cx, feetY, targetH, rot, flip, shadow) {
+  if (!im || !im.width) return;
+  const { w, h } = spriteWH(im, targetH);
+  ctx.save();
+  ctx.translate(cx, feetY);
+  // ground contact shadow (drawn before rotate/flip so it stays flat on the pitch)
+  if (shadow !== false) {
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
+    ctx.beginPath(); ctx.ellipse(0, 0, w * 0.34, h * 0.05, 0, 0, 7); ctx.fill();
+  }
+  if (rot) ctx.rotate(rot);
+  if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(im, -w / 2, -h, w, h);
+  ctx.restore();
+}
+
+function drawKeeper() {
+  const k = G.keeper;
+  // Background (scene_clean.png) has NO baked keeper/ball, so no masking needed —
+  // the sprite keeper is the only keeper.
+
+  if (k.pose !== "dive") {
+    // ---- IDLE: alive breathing / sway ----
+    const t = animClock / 1000;
+    const bob   = Math.sin(t * 2.2) * (CH * 0.006);        // vertical breathing
+    const sway  = Math.sin(t * 1.1) * (CW * 0.004);        // slow side sway
+    const breath = 1 + Math.sin(t * 2.2) * 0.015;          // subtle vertical scale
+    const tilt  = Math.sin(t * 0.9) * 0.02;                // tiny lean
+    drawKeeperSprite(IMG.k_idle, KEEP_X + sway, KEEP_FEET_Y + bob, KEEP_IDLE_H * breath, tilt);
+    return;
+  }
+
+  // ---- DIVE: move toward the reach target (covers top OR bottom corners) ----
+  const p = Math.min(1, k.anim);
+  const e = 1 - Math.pow(1 - p, 3);            // ease-out
+
+  if (k.dir === 0) {
+    // center: jump straight up (high for a top shot, small hop for a low one)
+    const jump = (k.topShot ? CH * 0.14 : CH * 0.03) * Math.sin(p * Math.PI * 0.75) * 1.3;
+    drawKeeperSprite(IMG.k_jump, KEEP_X, KEEP_FEET_Y - jump, KEEP_IDLE_H * (1 + 0.06 * e), 0, false, false);
+    return;
+  }
+
+  // Side dive: use the clean dive_left sprite for BOTH sides; flip it for the right.
+  // Reach horizontally toward the target column, and lift the keeper's "feet" point up so
+  // his stretched body covers the corner — much higher for a top-row shot.
+  const dx = (k.reachX - KEEP_X) * e;
+  const topLift  = CH * 0.20;   // full airborne stretch toward a top corner
+  const lowLift  = CH * 0.05;   // low, along the ground for a bottom corner
+  const lift = (k.topShot ? topLift : lowLift) * Math.sin(p * Math.PI * 0.8) * 1.25;
+  const rot  = k.dir * (k.topShot ? 0.05 : 0.18) * e;  // low dives lean more horizontal
+  const diveH = KEEP_IDLE_H * 0.82;
+  drawKeeperSprite(IMG.k_left, KEEP_X + dx, KEEP_FEET_Y - lift, diveH, rot, k.dir > 0, false);
+}
+
+function drawBall() {
+  const b = G.ball;
+  const im = IMG.ball;
+  // ground shadow at the ball's resting spot (shrinks as the ball rises in flight)
+  const airLift = Math.max(0, BALL_Y - b.y);
+  const shScale = Math.max(0.4, 1 - airLift / (CH * 0.25));
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath();
+  ctx.ellipse(b.x, BALL_Y + BALL_R * 0.5, BALL_R * 1.1 * shScale, BALL_R * 0.35 * shScale, 0, 0, 7);
+  ctx.fill();
+  ctx.restore();
+
+  if (im && im.width) {
+    const d = BALL_R * 2.1;   // sprite diameter
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.spin || 0);
+    ctx.drawImage(im, -d / 2, -d / 2, d, d);
+    ctx.restore();
+  } else {
+    // fallback code-drawn ball
+    ctx.save();
+    ctx.fillStyle = WHITE;
+    ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#333"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, 7); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawParticles() {
+  for (const p of G.particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.s, p.s);
+  }
+  ctx.globalAlpha = 1;
+}
+function spawnBurst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 7, sp = 4 + Math.random() * 14;
+    G.particles.push({
+      x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - 4,
+      s: 6 + Math.random()*10, color, life: 700 + Math.random()*400, max: 900
+    });
+  }
+}
+
+function drawFeedback() {
+  // Keep the LIVE scene (new keeper mid-dive, ball, particles) and draw only the
+  // feedback decorations in code — do NOT overlay the baked feedback PNG, which has
+  // the old keeper + whole scene baked in and would hide the animated keeper.
+  drawScene();
+
+  const goal = G.fbType === "goal";
+  // colored flash tint that fades over the first ~500ms
+  const flash = Math.max(0, 1 - G.t / 500);
+  if (flash > 0) {
+    ctx.save();
+    ctx.globalAlpha = flash * 0.35;
+    ctx.fillStyle = goal ? "#2fbf4f" : "#d23a3a";
+    ctx.fillRect(0, 0, CW, CH);
+    ctx.restore();
+  }
+
+  // punch-in scale on the TEXT only
+  const p = Math.min(1, G.t / 220);
+  const sc = 0.7 + 0.3 * (1 - Math.pow(1 - p, 3));
+  const overshoot = 1 + Math.max(0, Math.sin(p * Math.PI)) * 0.06;
+  ctx.save();
+  ctx.translate(CW / 2, CH * 0.24);
+  ctx.scale(sc * overshoot, sc * overshoot);
+  if (goal) {
+    outlineText("GOOOAL!", 0, 0, 150, YELLOW, 6, NAVY);
+    outlineText("+1", 0, CH * 0.13, 80, "#7CFF9A", 5, NAVY);
+  } else {
+    outlineText("SAVED!", 0, 0, 150, WHITE, 6, NAVY);
+    outlineText("COBA LAGI", 0, CH * 0.12, 66, "#FF6B6B", 5, NAVY);
+  }
+  ctx.restore();
+
+  scanlines();
+}
+
+function drawResult() {
+  const im = G.score === 1 ? IMG.result1 : G.score === 2 ? IMG.result2 : IMG.result3;
+  drawImageFill(im, 0, 0, CW, CH);
+  // PLAY AGAIN button hotspot region: baked into the image near bottom-center.
+  // If replay already used, dim & disable it.
+  if (G.replayed) {
+    ctx.fillStyle = "rgba(6,10,30,0.55)";
+    // cover the button area (approx bottom-center of the 2304x1440 -> our CW/CH)
+    const bw = CW*0.30, bh = CH*0.075, bx = (CW-bw)/2, by = CH*0.86;
+    roundRect(bx, by, bw, bh, 40); ctx.fill();
+    outlineText("SELESAI", CW/2, by + bh/2 + 2, 44, "#999", 3, NAVY);
+  }
+  scanlines();
+}
+
+/* ============================================================
+   small path helpers + scanlines
+   ============================================================ */
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+function scanlines() {
+  ctx.save();
+  ctx.globalAlpha = 0.06; ctx.fillStyle = "#000";
+  for (let y = 0; y < CH; y += 4) ctx.fillRect(0, y, CW, 2);
+  ctx.restore();
+}
+
+/* ============================================================
+   SHOT SEQUENCE
+   ============================================================ */
+function lockZone(zoneIdx) {
+  G.chosenZone = zoneIdx;
+  SFX.click();
+  setScreen("power");
+}
+function lockPower() {
+  G.power = oscValue();
+  SFX.kick();
+  fireShot();
+}
+function fireShot() {
+  const z = ZONES[G.chosenZone];
+  const b = G.ball;
+  b.sx = BALL_X; b.sy = BALL_Y;
+  b.tx = z.x; b.ty = z.y;
+  b.active = true;
+  b.spin = 0;
+  b.spinDir = z.x < BALL_X ? -1 : 1;   // spin matches travel direction
+  // keeper decision from rigged schedule (decoupled from aim)
+  const willGoal = G.schedule[G.shot];
+  const k = G.keeper;
+  if (willGoal) {
+    // GOAL: keeper commits the WRONG way — dive toward a different corner than the ball.
+    // horizontal: opposite side of the aimed column (center shots -> random side).
+    const wrongCol = z.col === 1 ? (Math.random() < 0.5 ? 0 : 2) : (2 - z.col);
+    k.dir = wrongCol === 0 ? -1 : wrongCol === 2 ? 1 : 0;
+    // aim the keeper at the wrong corner (opposite column, opposite-ish height)
+    k.reachX = ZONES.find(zz => zz.col === wrongCol && zz.row === (1 - z.row))
+             ? ZONES.find(zz => zz.col === wrongCol && zz.row === (1 - z.row)).x : KEEP_X;
+    k.reachY = z.row === 0 ? GY1 : GY0;   // if ball goes high, keeper goes low, and vice-versa
+  } else {
+    // SAVE: keeper reaches the EXACT aimed zone (covers top or bottom corner properly).
+    k.dir = z.col === 0 ? -1 : z.col === 2 ? 1 : 0;
+    k.reachX = z.x;
+    k.reachY = z.y;
+  }
+  k.topShot = (z.row === 0);   // reaching a top zone -> full airborne stretch
+  k.pose = "dive"; k.anim = 0;
+  G.willGoal = willGoal;
+  SFX.whoosh();
+  setScreen("shooting");
+}
+function resolveShot() {
+  const goal = G.willGoal;
+  G.results[G.shot] = goal ? "goal" : "save";
+  if (goal) G.score++;
+  G.fbType = goal ? "goal" : "save";
+  G.shake = goal ? 26 : 16;
+  if (goal) {
+    G.netRipple = 1;
+    spawnBurst(G.ball.x, G.ball.y, YELLOW, 40);
+    SFX.goal();
+  } else {
+    spawnBurst(G.ball.x, G.ball.y, "#ddd", 24);
+    SFX.save();
+  }
+  setScreen("feedback");
+}
+function afterFeedback() {
+  G.ball.active = false;
+  G.ball.x = BALL_X; G.ball.y = BALL_Y; G.ball.spin = 0;
+  G.keeper.pose = "idle"; G.keeper.dir = 0; G.keeper.anim = 0;
+  G.shot++;
+  if (G.shot >= 3) {
+    setScreen("result");
+  } else {
+    G.chosenZone = -1; G.hoverZone = -1;
+    setScreen("aim");
+  }
+}
+
+/* ============================================================
+   UPDATE (per frame)
+   ============================================================ */
+let animClock = 0;   // continuous clock for idle keeper breathing
+function update(dt) {
+  G.t += dt;
+  animClock += dt;
+  // oscillator advances only during aim/power
+  if (G.screen === "aim" || G.screen === "power") powerPhase += dt / 1000 * Math.PI * 3;
+
+  // decay fx
+  if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 0.06);
+  if (G.netRipple > 0) G.netRipple = Math.max(0, G.netRipple - dt * 0.003);
+  for (const p of G.particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.5; p.life -= dt;
+  }
+  G.particles = G.particles.filter(p => p.life > 0);
+
+  if (G.screen === "shooting") {
+    const b = G.ball;
+    const dur = 420 - G.power * 120;      // higher power = faster
+    const p = Math.min(1, G.t / dur);
+    const e = p;
+    b.x = b.sx + (b.tx - b.sx) * e;
+    // arc: parabola up then to target
+    b.y = b.sy + (b.ty - b.sy) * e - Math.sin(p * Math.PI) * CH * 0.12;
+    // spin the ball as it flies (feels alive)
+    b.spin += (b.spinDir || 1) * dt / 1000 * 22;
+    // trail
+    if (Math.random() < 0.5) G.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, s: 6, color: "rgba(255,255,255,0.6)", life: 200, max: 200 });
+    // keeper dive progresses
+    G.keeper.anim = Math.min(1, G.keeper.anim + dt / 320);
+    if (p >= 1) resolveShot();
+  }
+
+  if (G.screen === "feedback") {
+    G.keeper.anim = Math.min(1, G.keeper.anim + dt / 320);
+    if (G.t > 1300) afterFeedback();
+  }
+}
+
+/* ============================================================
+   RENDER dispatch
+   ============================================================ */
+function render(dt) {
+  ctx.clearRect(0, 0, CW, CH);
+  switch (G.screen) {
+    case "title":    drawTitle(dt); break;
+    case "select":   drawSelect(); break;
+    case "vs":       drawVS(); break;
+    case "aim":
+    case "power":
+    case "shooting": drawScene(); break;
+    case "feedback": drawFeedback(); break;
+    case "result":   drawResult(); break;
+  }
+}
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let last = 0, paused = false;
+function loop(ts) {
+  if (!last) last = ts;
+  let dt = ts - last; last = ts;
+  if (dt > 60) dt = 60;
+  if (!paused) { update(dt); render(dt); }
+  requestAnimationFrame(loop);
+}
+
+/* ============================================================
+   INPUT — map screen coords to canvas coords
+   ============================================================ */
+function canvasPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - r.left) / r.width * CW,
+    y: (clientY - r.top) / r.height * CH,
+  };
+}
+function zoneAt(x, y) {
+  for (let i = 0; i < ZONES.length; i++) {
+    const z = ZONES[i];
+    // generous hit area (zone rectangle around the circle)
+    if (Math.hypot(x - z.x, y - z.y) <= AIM_R * 2.0) return i;
+  }
+  return -1;
+}
+function rectAt(x, y) {
+  for (const r of SELECT_RECTS) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+  return null;
+}
+
+function onMove(x, y) {
+  if (G.screen === "aim") G.hoverZone = zoneAt(x, y);
+  else if (G.screen === "select") G.hoverRect = rectAt(x, y);
+}
+function onTap(x, y) {
+  audio(); // unlock on first gesture
+  switch (G.screen) {
+    case "title":
+      SFX.click(); setScreen("select"); break;
+    case "select": {
+      const r = rectAt(x, y);
+      if (r) { SFX.click(); G.shooter = r.country; assignRival(); startNewGame(); setScreen("vs"); }
+      break;
+    }
+    case "vs":
+      SFX.click(); setScreen("aim"); break;
+    case "aim": {
+      const zi = zoneAt(x, y);
+      if (zi >= 0) lockZone(zi);
+      break;
+    }
+    case "power":
+      lockPower(); break;
+    case "result": {
+      if (!G.replayed) {
+        // PLAY AGAIN button hotspot (bottom-center)
+        const bw = CW*0.30, bh = CH*0.09, bx = (CW-bw)/2, by = CH*0.83;
+        if (x >= bx && x <= bx+bw && y >= by && y <= by+bh) {
+          SFX.click();
+          G.replayed = true;
+          G.shooter = null; G.rival = null;
+          setScreen("select");
+        }
+      }
+      break;
+    }
+  }
+}
+
+canvas.addEventListener("mousemove", e => { const p = canvasPos(e.clientX, e.clientY); onMove(p.x, p.y); });
+canvas.addEventListener("click", e => { const p = canvasPos(e.clientX, e.clientY); onTap(p.x, p.y); });
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  const t = e.changedTouches[0]; const p = canvasPos(t.clientX, t.clientY);
+  onMove(p.x, p.y); onTap(p.x, p.y);
+}, { passive: false });
+
+// Keyboard: SPACE / ENTER. In power it locks power (the guide's step 2).
+// In aim it locks the currently hovered zone (mouse users); on other screens it advances.
+window.addEventListener("keydown", e => {
+  if (e.code !== "Space" && e.code !== "Enter") return;
+  e.preventDefault();
+  audio();
+  switch (G.screen) {
+    case "title":  SFX.click(); setScreen("select"); break;
+    case "vs":     SFX.click(); setScreen("aim"); break;
+    case "aim":
+      if (G.hoverZone >= 0) lockZone(G.hoverZone);
+      break;
+    case "power":  lockPower(); break;
+    case "result":
+      if (!G.replayed) { SFX.click(); G.replayed = true; G.shooter = null; G.rival = null; setScreen("select"); }
+      break;
+    // select needs a specific flag -> keyboard can't pick; ignore
+  }
+});
+
+/* ============================================================
+   RESPONSIVE SIZING + mobile landscape gate
+   ============================================================ */
+function fitCanvas() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / CW, vh / CH);
+  canvas.style.width = (CW * scale) + "px";
+  canvas.style.height = (CH * scale) + "px";
+}
+const rotateEl = document.getElementById("rotate");
+function isMobile() {
+  return window.matchMedia("(pointer: coarse)").matches || ("ontouchstart" in window);
+}
+function checkOrientation() {
+  const portrait = window.matchMedia("(orientation: portrait)").matches;
+  const gate = isMobile() && portrait;
+  rotateEl.classList.toggle("show", gate);
+  paused = gate;
+  if (!gate) last = 0; // reset dt so no huge jump after resume
+}
+window.addEventListener("resize", () => { fitCanvas(); checkOrientation(); });
+window.addEventListener("orientationchange", () => { setTimeout(() => { fitCanvas(); checkOrientation(); }, 100); });
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+loadAssets(() => {
+  document.getElementById("loader").style.display = "none";
+  fitCanvas();
+  checkOrientation();
+  requestAnimationFrame(loop);
+});
+
+})();
+</script>
+</body>
+</html>
