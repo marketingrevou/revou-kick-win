@@ -28,17 +28,19 @@ rc*.png
 rd*.png
 
 # Root-level duplicates/exports (game loads from assets/ and flags/ instead)
-country_select.png
-feedback_goal.png
-feedback_saved.png
-hud.png
-k_topright.png
-logo_kickwin_final.png
-result_1of3.png
-result_2of3.png
-result_3of3.png
-title_background.png
-vs_reveal.png
+# NOTE: leading slash anchors these to the repo root ONLY — the real files
+# live under assets/ and must stay tracked.
+/country_select.png
+/feedback_goal.png
+/feedback_saved.png
+/hud.png
+/k_topright.png
+/logo_kickwin_final.png
+/result_1of3.png
+/result_2of3.png
+/result_3of3.png
+/title_background.png
+/vs_reveal.png
 
 # OS files
 .DS_Store
