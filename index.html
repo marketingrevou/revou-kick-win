@@ -10,7 +10,9 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    background: #060a1e;
+    /* Framed backdrop: navy radial glow so letterboxing reads as intentional. */
+    background:
+      radial-gradient(ellipse 120% 120% at 50% 38%, #1b2a63 0%, #101a44 42%, #0a1230 72%, #060a1e 100%);
     overflow: hidden;
     font-family: 'Arial Black', Arial, sans-serif;
     -webkit-user-select: none; user-select: none;
@@ -27,6 +29,13 @@
     image-rendering: crisp-edges;
     background: #060a1e;
     cursor: pointer;
+    /* Frame the screen like a mounted arcade panel. */
+    border: 3px solid rgba(255, 222, 61, 0.28);
+    border-radius: 14px;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.5),
+      0 18px 60px rgba(0,0,0,0.55),
+      0 0 90px rgba(27, 42, 99, 0.65);
   }
 
   /* ---------- Loading ---------- */
@@ -128,6 +137,10 @@
 <div id="wrap">
   <canvas id="game" width="2148" height="1198"></canvas>
 </div>
+
+<!-- Intro visuals: looped, drawn onto the title canvas frame-by-frame. Hidden from layout. -->
+<video id="introVid" src="assets/intro.mp4" loop muted playsinline preload="auto"
+       style="position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; left:-9999px;"></video>
 
 <div id="loader">
   <div>KICK &amp; WIN</div>
@@ -477,6 +490,15 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 ctx.imageSmoothingEnabled = false;
 
+// Intro video: looped visuals for the title screen, drawn onto the canvas.
+const introVid = document.getElementById("introVid");
+let introVidReady = false;
+introVid.addEventListener("loadeddata", () => { introVidReady = true; });
+// Kick off playback (muted + playsinline lets autoplay work on mobile). A user
+// gesture also triggers this via the click/touch handlers, covering strict browsers.
+function playIntroVid() { const p = introVid.play(); if (p && p.catch) p.catch(() => {}); }
+playIntroVid();
+
 const G = {
   screen: "title",         // title|select|vs|aim|power|shooting|feedback|result
   shooter: null,
@@ -592,6 +614,14 @@ function drawImageFill(im, dx, dy, dw, dh) {
   if (!im.width) return;
   ctx.drawImage(im, dx, dy, dw, dh);
 }
+function drawVideoCover(vid, dx, dy, dw, dh) {
+  // cover-fit the video into the target rect, cropping the overflow (no letterbox)
+  const sw = vid.videoWidth, sh = vid.videoHeight;
+  if (!sw || !sh) return;
+  const scale = Math.max(dw / sw, dh / sh);
+  const w = sw * scale, h = sh * scale;
+  ctx.drawImage(vid, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h);
+}
 function outlineText(txt, x, y, size, fill, ow, oc, align = "center", baseline = "middle") {
   ctx.font = "900 " + size + "px 'Arial Black', Arial, sans-serif";
   ctx.textAlign = align; ctx.textBaseline = baseline;
@@ -629,8 +659,13 @@ function easeOutBack(p) { const c = 1.70158; return 1 + (c + 1) * Math.pow(p - 1
    SCREEN RENDERERS
    ============================================================ */
 function drawTitle(dt) {
-  // Static title background (the intro video was removed at the user's request).
-  drawImageFill(IMG.title_bg, 0, 0, CW, CH);
+  // Looping intro video as the background; static title_bg is the fallback until
+  // the video has decodable frames (and if playback is ever blocked).
+  if (introVidReady && introVid.videoWidth) {
+    drawVideoCover(introVid, 0, 0, CW, CH);
+  } else {
+    drawImageFill(IMG.title_bg, 0, 0, CW, CH);
+  }
 
   // ---- logo: epic entrance (drop-in + scale overshoot), then gentle float ----
   const lw0 = CW * 0.62, lh0 = lw0 * (IMG.logo.height / IMG.logo.width);
@@ -1609,6 +1644,9 @@ function onTap(x, y) {
   }
 }
 
+// Resume intro playback on the first user gesture (covers browsers that block autoplay).
+window.addEventListener("pointerdown", playIntroVid, { once: true });
+
 canvas.addEventListener("mousemove", e => { const p = canvasPos(e.clientX, e.clientY); onMove(p.x, p.y); });
 canvas.addEventListener("click", e => { const p = canvasPos(e.clientX, e.clientY); onTap(p.x, p.y); });
 canvas.addEventListener("touchstart", e => {
@@ -1642,7 +1680,10 @@ window.addEventListener("keydown", e => {
    ============================================================ */
 function fitCanvas() {
   const vw = window.innerWidth, vh = window.innerHeight;
-  const scale = Math.min(vw / CW, vh / CH);
+  // Leave a small margin so the framed canvas floats inside the navy backdrop.
+  const pad = Math.round(Math.min(vw, vh) * 0.03);
+  const availW = vw - pad * 2, availH = vh - pad * 2;
+  const scale = Math.min(availW / CW, availH / CH);
   const w = CW * scale, h = CH * scale;
   canvas.style.width = w + "px";
   canvas.style.height = h + "px";

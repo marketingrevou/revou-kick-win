@@ -43,3 +43,11 @@ vs_reveal.png
 # OS files
 .DS_Store
 Thumbs.db
+
+.vercel
+
+# Scratch / unused root exports
+scratchpad/
+Goal transparent.png
+ingame crowd.png
+video intro.mp4
