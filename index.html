@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="icon" type="image/png" href="assets/revou-logo.png">
+<link rel="apple-touch-icon" href="assets/revou-logo.png">
 <title>KICK &amp; WIN — RevoU</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -67,6 +69,59 @@
     font-size: 4vmin; color: #fff; margin-top: 2vmin; font-weight: bold;
     text-shadow: 2px 2px 0 #141D45;
   }
+
+  /* ---------- Email gate popup ---------- */
+  #emailGate {
+    position: fixed; inset: 0; z-index: 60;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(6, 10, 30, 0.88);
+    backdrop-filter: blur(6px);
+    padding: 6vmin;
+  }
+  #emailGate.show { display: flex; }
+  #emailCard {
+    width: 100%; max-width: 480px;
+    background: #141D45;
+    border: 4px solid #FFDE3D;
+    border-radius: 20px;
+    padding: 34px 30px 30px;
+    text-align: center;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    font-family: Arial, sans-serif;
+  }
+  #emailCard h2 {
+    font-family: 'Arial Black', Arial, sans-serif;
+    color: #FFDE3D; font-size: 26px; letter-spacing: 1px;
+    text-shadow: 2px 2px 0 #0b1230;
+  }
+  #emailCard p {
+    color: #fff; font-size: 15px; margin-top: 12px; line-height: 1.4; font-weight: bold;
+  }
+  #emailInput {
+    width: 100%; margin-top: 22px;
+    padding: 14px 16px; font-size: 17px;
+    border: 3px solid #FFDE3D; border-radius: 12px;
+    background: #0b1230; color: #fff;
+    outline: none; text-align: center;
+    font-family: Arial, sans-serif;
+  }
+  #emailInput::placeholder { color: #7c86ad; }
+  #emailInput:focus { box-shadow: 0 0 0 3px rgba(255,222,61,0.35); }
+  #emailErr {
+    color: #ff6b6b; font-size: 13px; margin-top: 10px; min-height: 16px; font-weight: bold;
+  }
+  #emailBtn {
+    width: 100%; margin-top: 16px;
+    padding: 15px; font-size: 18px; letter-spacing: 1px;
+    font-family: 'Arial Black', Arial, sans-serif;
+    color: #141D45; background: #FFDE3D;
+    border: none; border-radius: 99px; cursor: pointer;
+    transition: transform .1s, opacity .2s;
+  }
+  #emailBtn:hover { transform: scale(1.03); }
+  #emailBtn:disabled { opacity: 0.6; cursor: default; transform: none; }
+  #emailNote { color: #7c86ad; font-size: 12px; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -94,9 +149,77 @@
   <p>Mainkan dalam mode landscape</p>
 </div>
 
+<div id="emailGate">
+  <div id="emailCard">
+    <h2>MASUKKAN EMAIL KAMU</h2>
+    <p>Daftar untuk mulai bermain &amp; klaim hadiahmu!</p>
+    <input id="emailInput" type="email" inputmode="email" autocomplete="email"
+           placeholder="nama@email.com" maxlength="120" />
+    <div id="emailErr"></div>
+    <button id="emailBtn">MULAI MAIN</button>
+    <div id="emailNote">1 email = 1 kesempatan bermain</div>
+  </div>
+</div>
+
 <script>
 "use strict";
 (function () {
+
+/* ============================================================
+   EMAIL GATE + UTM CAPTURE + GOOGLE SHEETS LOGGING
+   ============================================================ */
+// Apps Script Web App URL (deploy the Code.gs in APPS_SCRIPT.md, paste the /exec URL here).
+const SHEETS_ENDPOINT = "https://script.google.com/macros/s/AKfycbz-t_gyKgEaatqDL9PmESPVS7_8joQa3sHFewl6hXBz3sZgNQT7lzQZuPZLfbYDOKHB/exec";
+
+// Capture UTM params from the page URL once, at load.
+const UTM = (function () {
+  const q = new URLSearchParams(window.location.search);
+  return {
+    utm_campaign: q.get("utm_campaign") || "",
+    utm_source:   q.get("utm_source")   || "",
+    utm_medium:   q.get("utm_medium")   || "",
+    utm_content:  q.get("utm_content")  || "",
+  };
+})();
+
+// Player email is set once the gate is passed; used when logging the prize.
+let PLAYER_EMAIL = "";
+const USED_KEY = "kickwin_used_emails";
+
+function usedEmails() {
+  try { return JSON.parse(localStorage.getItem(USED_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function markEmailUsed(email) {
+  try {
+    const list = usedEmails();
+    if (!list.includes(email)) { list.push(email); localStorage.setItem(USED_KEY, JSON.stringify(list)); }
+  } catch (e) {}
+}
+function isEmailUsed(email) { return usedEmails().includes(email); }
+function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
+
+// Fire-and-forget log to Google Sheets. Uses no-cors + urlencoded body so the
+// Apps Script web app receives it without a CORS preflight.
+function logToSheet(prize) {
+  if (!SHEETS_ENDPOINT || SHEETS_ENDPOINT.indexOf("PASTE_") === 0) return;
+  const body = new URLSearchParams({
+    email: PLAYER_EMAIL,
+    prize: prize || "",
+    utm_campaign: UTM.utm_campaign,
+    utm_source:   UTM.utm_source,
+    utm_medium:   UTM.utm_medium,
+    utm_content:  UTM.utm_content,
+  });
+  try {
+    fetch(SHEETS_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    }).catch(() => {});
+  } catch (e) {}
+}
 
 /* ============================================================
    CONSTANTS & GEOMETRY  (native canvas 2148 x 1198)
@@ -191,9 +314,8 @@ const ASSET_LIST = {
   stadium:    "assets/stadium_empty.png",
   scene:      "assets/scene_clean.png",
   ball:       "assets/ball.png",
-  result1:    "assets/result_1of3.png",
-  result2:    "assets/result_2of3.png",
-  result3:    "assets/result_3of3.png",
+  // result cards are now re-drawn in code (over title_bg) for the staggered reveal —
+  // the baked result_{1,2,3}of3.png are no longer loaded.
   k_idle:     "assets/keeper/idle.png",
   k_left:     "assets/keeper/dive_left.png",   // flipped in code for right dives
   k_jump:     "assets/keeper/jump.png",
@@ -259,6 +381,95 @@ const SFX = {
   save:   () => { tone(150, 0.25, "sawtooth", 0.3, 60); noise(0.12, 0.15, 300); },
 };
 
+/* ---- Sample-based SFX (AI-generated clips, decoded via the same AudioContext) ----
+   Kept low under a master gain so they enrich, not overwhelm. Everything is gated
+   behind audio() (first-gesture unlock). Clips fetch+decode lazily on unlock. */
+const SND_SRC = {
+  ambience: "assets/sfx/crowd_ambience.mp3",
+  cheer:    "assets/sfx/cheer.mp3",
+  groan:    "assets/sfx/groan.mp3",
+  kick:     "assets/sfx/kick.mp3",
+  whistle:  "assets/sfx/whistle.mp3",
+  music:    "assets/sfx/menu_music.mp3",   // upbeat menu anthem (title -> VS)
+  pop:      "assets/sfx/pop.mp3",           // friendly UI click (replaces synth beep)
+  vs_swell: "assets/sfx/vs_swell.mp3",      // VS slam impact swell
+};
+const SND_GAIN = { ambience: 0.30, cheer: 0.55, groan: 0.5, kick: 0.6, whistle: 0.45, music: 0.34, pop: 0.5, vs_swell: 0.5 };
+const SND = {};           // key -> AudioBuffer
+let sndMaster = null;     // master GainNode (kept low)
+let sndLoaded = false, sndLoading = false;
+let ambienceNode = null;  // {src, gain} for the looping bed
+let musicNode = null;     // {src, gain} for the looping menu music
+
+function loadSamples() {
+  const ac = audio(); if (!ac || sndLoaded || sndLoading) return;
+  sndLoading = true;
+  sndMaster = ac.createGain();
+  sndMaster.gain.value = 0.5;               // global low ceiling
+  sndMaster.connect(ac.destination);
+  const keys = Object.keys(SND_SRC);
+  let done = 0;
+  keys.forEach(k => {
+    fetch(SND_SRC[k]).then(r => r.arrayBuffer()).then(b => ac.decodeAudioData(b))
+      .then(buf => {
+        SND[k] = buf;
+        // start the menu music as soon as its buffer is ready, if we're on a front screen
+        if (k === "music" && (G.screen === "title" || G.screen === "select" || G.screen === "vs")) startMusic();
+        if (k === "ambience" && (G.screen === "aim" || G.screen === "power" || G.screen === "shooting" || G.screen === "feedback" || G.screen === "result")) startAmbience();
+      })
+      .catch(() => {})
+      .finally(() => { if (++done === keys.length) { sndLoaded = true; sndLoading = false; } });
+  });
+}
+function playSample(key, { loop = false, gain = null } = {}) {
+  const ac = audio(); if (!ac || !SND[key]) return null;
+  const src = ac.createBufferSource(); src.buffer = SND[key]; src.loop = loop;
+  const g = ac.createGain();
+  g.gain.value = gain != null ? gain : (SND_GAIN[key] || 0.5);
+  src.connect(g); g.connect(sndMaster || ac.destination);
+  try { src.start(); } catch (e) {}
+  return { src, gain: g };
+}
+function startAmbience() {
+  if (ambienceNode || !SND.ambience) return;
+  ambienceNode = playSample("ambience", { loop: true });
+}
+function stopAmbience() {
+  if (!ambienceNode) return;
+  const ac = audio();
+  try {
+    ambienceNode.gain.gain.setValueAtTime(ambienceNode.gain.gain.value, ac.currentTime);
+    ambienceNode.gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
+    ambienceNode.src.stop(ac.currentTime + 0.45);
+  } catch (e) {}
+  ambienceNode = null;
+}
+function startMusic() {
+  if (musicNode || !SND.music) return;
+  musicNode = playSample("music", { loop: true });
+}
+function stopMusic() {
+  if (!musicNode) return;
+  const ac = audio();
+  try {
+    musicNode.gain.gain.setValueAtTime(musicNode.gain.gain.value, ac.currentTime);
+    musicNode.gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.5);
+    musicNode.src.stop(ac.currentTime + 0.55);
+  } catch (e) {}
+  musicNode = null;
+}
+// convenience: real SFX layered at the right moments
+const SND_PLAY = {
+  cheer:   () => playSample("cheer"),
+  groan:   () => playSample("groan"),
+  kick:    () => playSample("kick"),
+  whistle: () => playSample("whistle"),
+  pop:     () => playSample("pop"),
+  swell:   () => playSample("vs_swell"),
+};
+// nicer UI click: real pop if loaded, else fall back to the synth blip
+function uiClick() { if (SND.pop) SND_PLAY.pop(); else SFX.click(); }
+
 /* ============================================================
    GAME STATE
    ============================================================ */
@@ -291,6 +502,11 @@ const G = {
   shake: 0,
   netRipple: 0,
   fbType: null,            // 'goal'|'save' during feedback
+  // screen transition (fade) — 0..1 fresh-in
+  transT: 0,
+  prevScreen: null,
+  // celebratory confetti (used on goal + result), independent of gameplay particles
+  confetti: [],
 };
 
 function weightedTarget() {
@@ -335,7 +551,38 @@ window.__rigTest = function (n) {
   return { n, dist, minScore, pct: { 1: dist[1]/n, 2: dist[2]/n, 3: dist[3]/n } };
 };
 
-function setScreen(s) { G.screen = s; G.t = 0; }
+function setScreen(s) {
+  const prev = G.screen;
+  G.prevScreen = prev;
+  G.screen = s;
+  G.t = 0;
+  G.transT = 0;                 // start fade-in for the new screen
+
+  // ---- menu music: plays on the front screens (title -> select -> vs) ----
+  const wantMusic = (s === "title" || s === "select" || s === "vs");
+  if (wantMusic) startMusic(); else stopMusic();
+
+  // ---- ambience bed: on during gameplay + result, off elsewhere ----
+  const wantAmb = (s === "aim" || s === "power" || s === "shooting" || s === "feedback" || s === "result");
+  if (wantAmb) startAmbience(); else stopAmbience();
+
+  // ---- kick-off whistle when the shootout actually begins ----
+  if (s === "aim" && prev === "vs" && SND_PLAY.whistle) SND_PLAY.whistle();
+
+  // ---- per-screen one-shot resets ----
+  if (s === "vs") vsBangDone = false;
+  if (s === "result") {
+    G.confetti = []; resultCheer = false;
+    // Log this play (Date, Email, Prize + UTM) to Google Sheets — once, on entry.
+    logToSheet(prizeLabel(G.score));
+  }
+}
+
+// Human-readable prize won for the given score (joined for a multi-prize win).
+function prizeLabel(score) {
+  const st = RESULT_STATES[score] || RESULT_STATES[1];
+  return st.prizes.map(p => p[0]).join(" + ");
+}
 
 /* ============================================================
    DRAW HELPERS
@@ -355,24 +602,56 @@ function outlineText(txt, x, y, size, fill, ow, oc, align = "center", baseline =
   ctx.fillStyle = fill;
   ctx.fillText(txt, x, y);
 }
+// word-wrap outlined text into `maxW`, centered, with `lineH` line spacing.
+function wrapOutlineText(txt, x, y, maxW, lineH, size, fill, ow, oc) {
+  ctx.font = "900 " + size + "px 'Arial Black', Arial, sans-serif";
+  const words = txt.split(" ");
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  const y0 = y - (lines.length - 1) * lineH / 2;
+  lines.forEach((ln, i) => outlineText(ln, x, y0 + i * lineH, size, fill, ow, oc));
+}
+// pick current frame of a loop from a clock
+function frameIndex(clockMs, frameCount, fps) {
+  return Math.floor(clockMs / (1000 / fps)) % frameCount;
+}
+// easing
+function easeOut(p) { return 1 - Math.pow(1 - p, 3); }
+function easeOutBack(p) { const c = 1.70158; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); }
 
 /* ============================================================
    SCREEN RENDERERS
    ============================================================ */
 function drawTitle(dt) {
+  // Static title background (the intro video was removed at the user's request).
   drawImageFill(IMG.title_bg, 0, 0, CW, CH);
-  // blinking "CLICK TO START" is baked into the mockup title_final, but title_background
-  // has no text -> draw the logo + prompt in code.
-  // logo (781x174) centered top
-  const lw = CW * 0.62, lh = lw * (IMG.logo.height / IMG.logo.width);
-  ctx.drawImage(IMG.logo, (CW - lw) / 2, CH * 0.06, lw, lh);
-  // blinking prompt
+
+  // ---- logo: epic entrance (drop-in + scale overshoot), then gentle float ----
+  const lw0 = CW * 0.62, lh0 = lw0 * (IMG.logo.height / IMG.logo.width);
+  const inP = Math.min(1, G.t / 650);
+  const scEnter = 0.7 + 0.3 * easeOutBack(inP);          // 0.7 -> ~1 with overshoot
+  const dropY = (1 - easeOut(inP)) * -CH * 0.10;         // slides down into place
+  const float = Math.sin(animClock / 900) * (CH * 0.010) * inP;  // idle bob after settle
+  const lw = lw0 * scEnter, lh = lh0 * scEnter;
+  ctx.save();
+  ctx.globalAlpha = inP;
+  ctx.drawImage(IMG.logo, (CW - lw) / 2, CH * 0.06 + dropY + float - (lh - lh0) / 2, lw, lh);
+  ctx.restore();
+
+  // ---- blinking + pulsing "CLICK TO START" ----
   const blink = (Math.floor(G.t / 500) % 2) === 0;
-  if (blink) {
-    const bw = CW * 0.30, bh = CH * 0.075, bx = (CW - bw) / 2, by = CH * 0.86;
+  if (blink && inP > 0.6) {
+    const pulse = 1 + Math.sin(animClock / 260) * 0.04;
+    const bw = CW * 0.30 * pulse, bh = CH * 0.075 * pulse, bx = (CW - bw) / 2, by = CH * 0.86;
     ctx.fillStyle = "rgba(10,16,40,0.85)";
     roundRect(bx, by, bw, bh, 12); ctx.fill();
-    outlineText("CLICK TO START", CW / 2, by + bh / 2 + 4, 52, WHITE, 3, NAVY);
+    outlineText("CLICK TO START", CW / 2, by + bh / 2 + 4, 52 * pulse, WHITE, 3, NAVY);
   }
   scanlines();
 }
@@ -404,7 +683,21 @@ function drawFlagInBox(country, x, y, w, h) {
   ctx.strokeRect(x, y, w, h);
 }
 
+let vsBangDone = false;   // one-shot flash/shake when the flags slam together
 function drawVS() {
+  // ---- entrance timeline ----
+  const SLIDE = 500;                          // ms for flags to slide in
+  const slideP = easeOut(Math.min(1, G.t / SLIDE));
+  const bang = G.t >= SLIDE;                   // impact moment
+  const bangT = Math.max(0, G.t - SLIDE);
+  // impact flash + shake + swell hit
+  if (bang && !vsBangDone) { vsBangDone = true; G.shake = 22; if (SND.vs_swell) SND_PLAY.swell(); else SFX.click(); }
+  let sx = 0, sy = 0;
+  if (G.shake > 0) { sx = (Math.random()-0.5) * G.shake; sy = (Math.random()-0.5) * G.shake; }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
   // dimmed empty-stadium backdrop (NOT the country grid)
   drawImageFill(IMG.stadium, 0, 0, CW, CH);
   ctx.fillStyle = "rgba(6,10,30,0.72)"; ctx.fillRect(0, 0, CW, CH);
@@ -422,26 +715,63 @@ function drawVS() {
   const fw = CW * 0.28, fh = fw * 2/3;
   const fy = CH * 0.30;
   const lx = CW * 0.10, rx = CW * 0.62;
-  outlineText("KAMU", lx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
-  outlineText("RIVAL KEEPER", rx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
-  drawFlagInBox(G.shooter, lx, fy, fw, fh);
-  drawFlagInBox(G.rival,  rx, fy, fw, fh);
-  outlineText(CNAME[G.shooter], lx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
-  outlineText(CNAME[G.rival],  rx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  // slide offsets: left panel from off-screen left, right from off-screen right
+  const loff = -(1 - slideP) * CW * 0.6;
+  const roff =  (1 - slideP) * CW * 0.6;
 
-  // VS badge center
+  // gold speed-line streaks trailing the incoming flags (fade after impact)
+  if (slideP < 1 || bangT < 250) {
+    const streakA = slideP < 1 ? 0.5 : Math.max(0, 1 - bangT / 250) * 0.5;
+    ctx.save();
+    ctx.globalAlpha = streakA; ctx.strokeStyle = YELLOW; ctx.lineWidth = 6;
+    for (let i = 0; i < 5; i++) {
+      const yy = fy + fh * (0.15 + i * 0.18);
+      ctx.beginPath(); ctx.moveTo(lx + loff - CW*0.12, yy); ctx.lineTo(lx + loff + fw*0.2, yy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rx + roff + fw*0.8, yy); ctx.lineTo(rx + roff + fw + CW*0.12, yy); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  ctx.save(); ctx.translate(loff, 0);
+  outlineText("KAMU", lx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  drawFlagInBox(G.shooter, lx, fy, fw, fh);
+  outlineText(CNAME[G.shooter], lx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  ctx.restore();
+
+  ctx.save(); ctx.translate(roff, 0);
+  outlineText("RIVAL KEEPER", rx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  drawFlagInBox(G.rival,  rx, fy, fw, fh);
+  outlineText(CNAME[G.rival],  rx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  ctx.restore();
+
+  // VS badge center — pops with overshoot right at impact
   const bx = CW/2, by = fy + fh/2, br = CW*0.055;
+  const popP = bang ? Math.min(1, bangT / 260) : 0;
+  const badgeSc = bang ? (0.2 + 0.8 * easeOutBack(popP)) : 0.2 * slideP;
   ctx.save();
+  ctx.translate(bx, by); ctx.scale(badgeSc, badgeSc); ctx.translate(-bx, -by);
   ctx.shadowColor = YELLOW; ctx.shadowBlur = 40;
   ctx.fillStyle = NAVY; ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.fill();
-  ctx.restore();
+  ctx.shadowBlur = 0;
   ctx.strokeStyle = YELLOW; ctx.lineWidth = 8;
   ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.stroke();
   outlineText("VS", bx, by + 4, 72, YELLOW, 3, NAVY);
+  ctx.restore();
 
   outlineText("Cetak 3 gol untuk memenangkan hadiah terbaik!", CW/2, CH*0.80, 40, WHITE, 3, NAVY);
   const blink = (Math.floor(G.t / 500) % 2) === 0;
-  if (blink) outlineText("TAP TO KICK OFF", CW/2, CH*0.90, 56, YELLOW, 4, NAVY);
+  if (bang && blink) outlineText("TAP TO KICK OFF", CW/2, CH*0.90, 56, YELLOW, 4, NAVY);
+
+  ctx.restore();   // shake
+
+  // white impact flash (fades over ~220ms after the slam)
+  if (bang && bangT < 220) {
+    ctx.save();
+    ctx.globalAlpha = (1 - bangT / 220) * 0.6;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, CW, CH);
+    ctx.restore();
+  }
   scanlines();
 }
 
@@ -455,6 +785,9 @@ function drawScene() {
 
   drawImageFill(IMG.scene, 0, 0, CW, CH);
 
+  // living crowd — subtle bob + brightness ripple across the baked stands (see fn)
+  drawLiveCrowd();
+
   // net ripple flash on goal
   if (G.netRipple > 0) {
     ctx.save();
@@ -467,6 +800,7 @@ function drawScene() {
   drawKeeper();
   drawBall();
   drawParticles();
+  drawConfetti();
 
   // HUD overlays depend on sub-state
   drawScoreboard();
@@ -477,6 +811,61 @@ function drawScene() {
   }
   ctx.restore();
   scanlines();
+}
+
+/* Living crowd — GIF-STYLE: only the crowd moves, nothing else.
+   Re-samples vertical slices of the already-drawn crowd band and nudges each up by a
+   tiny amount QUANTIZED to a 3-frame loop (like a simple 3-frame pixel gif) at a slow
+   ~4fps step, so it reads as gentle bobbing — never "jumping out of the seats". Groups
+   of columns share a frame so neighbouring sections alternate (a soft wave). The goal
+   mouth is clipped out so the net/keeper/ball are untouched. On a goal, a brief "roar"
+   adds one extra step of lift + a faint warm flash. */
+let crowdRoar = 0;            // 0..1, decays; bumped on a goal
+const CROWD_Y0 = CH * 0.135, CROWD_Y1 = CH * 0.62;  // terraces band (above pitch)
+const CROWD_FPS = 4;                                 // gif-like step rate
+const CROWD_STEP = CH * 0.0016;                      // tiny per-frame lift (art-pixel sized)
+function drawLiveCrowd() {
+  const im = IMG.scene; if (!im || !im.width) return;
+  const roar = crowdRoar;
+  const cols = 40;
+  const sliceW = CW / cols;
+  const bandH = CROWD_Y1 - CROWD_Y0;
+  const sxs = im.width / CW, sys = im.height / CH;
+  // 3-frame vertical offsets: 0, 1, 2 steps up, then back — a stepped bob, not smooth
+  const cycle = [0, 1, 2, 1];
+  const baseFrame = frameIndex(animClock, cycle.length, CROWD_FPS);
+  // Keep a static margin OUTSIDE the goal frame on both sides so the vertical posts
+  // (which sit right at GX0/GX1) never shift with the crowd behind them.
+  const postGap = CW * 0.035;
+  const leftEnd = GX0 - postGap;          // left stand stops before the left post
+  const rightStart = GX1 + postGap;       // right stand starts after the right post
+  ctx.save();
+  ctx.beginPath();
+  // Only animate the LEFT and RIGHT stands, clear of the goal frame. The central column
+  // (behind/above the goal) and the post margins are left untouched, so the whole goal
+  // frame — crossbar and both posts — never moves with the crowd.
+  ctx.rect(0, CROWD_Y0, leftEnd, bandH);
+  ctx.rect(rightStart, CROWD_Y0, CW - rightStart, bandH);
+  ctx.clip();
+  for (let i = 0; i < cols; i++) {
+    const cx = i * sliceW;
+    // neighbouring groups of 4 columns are offset by 2 frames -> a soft alternating wave
+    const grp = (i >> 2) % 2;
+    const fi = cycle[(baseFrame + grp * 2) % cycle.length];
+    const lift = (fi + (roar > 0 ? 1 : 0)) * CROWD_STEP;   // roar adds one extra step
+    ctx.drawImage(im,
+      cx * sxs, CROWD_Y0 * sys, sliceW * sxs, bandH * sys,
+      cx, CROWD_Y0 - lift, sliceW + 1, bandH);
+  }
+  ctx.restore();
+  // faint warm flash ONLY during a goal roar (no idle brightness pulse)
+  if (roar > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = roar * 0.10;
+    ctx.fillStyle = "#fff2b0";
+    ctx.fillRect(0, CROWD_Y0, CW, bandH);
+    ctx.restore();
+  }
 }
 
 // Single-line guide, no frame — shows ONLY the current step's instruction.
@@ -576,19 +965,22 @@ function spriteWH(im, targetH) {
   const sc = targetH / im.height;
   return { w: im.width * sc, h: targetH };
 }
-function drawKeeperSprite(im, cx, feetY, targetH, rot, flip, shadow) {
+function drawKeeperSprite(im, cx, feetY, targetH, rot, flip, shadow, sx, sy) {
   if (!im || !im.width) return;
   const { w, h } = spriteWH(im, targetH);
+  const scX = sx || 1, scY = sy || 1;   // non-uniform squash/stretch (feet stay planted)
   ctx.save();
   ctx.translate(cx, feetY);
-  // ground contact shadow (drawn before rotate/flip so it stays flat on the pitch)
+  // ground contact shadow (drawn before rotate/flip so it stays flat on the pitch).
+  // Widen the shadow with the body's horizontal squash so it feels grounded.
   if (shadow !== false) {
     ctx.fillStyle = "rgba(0,0,0,0.30)";
-    ctx.beginPath(); ctx.ellipse(0, 0, w * 0.34, h * 0.05, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, 0, w * 0.34 * scX, h * 0.05, 0, 0, 7); ctx.fill();
   }
   if (rot) ctx.rotate(rot);
   if (flip) ctx.scale(-1, 1);
-  ctx.drawImage(im, -w / 2, -h, w, h);
+  // Draw from the feet (y=0) upward, so scaling height keeps the boots planted.
+  ctx.drawImage(im, -w / 2 * scX, -h * scY, w * scX, h * scY);
   ctx.restore();
 }
 
@@ -598,13 +990,19 @@ function drawKeeper() {
   // the sprite keeper is the only keeper.
 
   if (k.pose !== "dive") {
-    // ---- IDLE: alive breathing / sway ----
+    // ---- IDLE: "ready to catch" bounce, feet planted ----
+    // A 3-phase toe-bounce built from the single idle sprite: stand -> slight-ready ->
+    // deep-ready -> back. Each phase squashes the body vertically (knees bending) and
+    // widens it a touch (weight settling), while the feet stay locked to KEEP_FEET_Y.
+    // Because drawKeeperSprite draws upward from the feet, a vertical squash lowers the
+    // torso/head without lifting the boots — so he bobs down onto his toes, not floats.
     const t = animClock / 1000;
-    const bob   = Math.sin(t * 2.2) * (CH * 0.006);        // vertical breathing
-    const sway  = Math.sin(t * 1.1) * (CW * 0.004);        // slow side sway
-    const breath = 1 + Math.sin(t * 2.2) * 0.015;          // subtle vertical scale
-    const tilt  = Math.sin(t * 0.9) * 0.02;                // tiny lean
-    drawKeeperSprite(IMG.k_idle, KEEP_X + sway, KEEP_FEET_Y + bob, KEEP_IDLE_H * breath, tilt);
+    // Eased triangle wave over ~1.6s: 0 (stand) -> 1 (deep crouch) -> 0.
+    const cycle = (Math.sin(t * (Math.PI * 2 / 1.6) - Math.PI / 2) + 1) / 2; // 0..1..0
+    const crouch = cycle * cycle * (3 - 2 * cycle);        // smoothstep for a springy settle
+    const sy = 1 - crouch * 0.045;                         // squash down up to 4.5%
+    const sx = 1 + crouch * 0.030;                         // widen up to 3% as he bends
+    drawKeeperSprite(IMG.k_idle, KEEP_X, KEEP_FEET_Y, KEEP_IDLE_H, 0, false, true, sx, sy);
     return;
   }
 
@@ -680,6 +1078,38 @@ function spawnBurst(x, y, color, n) {
   }
 }
 
+// ---- celebratory confetti (goal + prize reveal) ----
+const CONF_COLORS = ["#FFDE3D", "#ffffff", "#3cd25a", "#e83c3c", "#2f6fd0", "#ff9f1c"];
+function spawnConfetti(n, fromTop) {
+  for (let i = 0; i < n; i++) {
+    const x = Math.random() * CW;
+    const y = fromTop ? -Math.random() * CH * 0.3 : CH * (0.25 + Math.random() * 0.2);
+    G.confetti.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: fromTop ? 2 + Math.random() * 3 : -6 - Math.random() * 5,
+      s: 10 + Math.random() * 14,
+      rot: Math.random() * 7, vr: (Math.random() - 0.5) * 0.4,
+      color: CONF_COLORS[(Math.random() * CONF_COLORS.length) | 0],
+      seed: Math.random() * 1000,
+      life: 2200 + Math.random() * 1500, max: 3700,
+    });
+  }
+}
+function drawConfetti() {
+  for (const c of G.confetti) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, c.life / 500));
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot);
+    ctx.fillStyle = c.color;
+    // flutter: squash width by rotation so it reads like a spinning paper flake
+    ctx.fillRect(-c.s / 2, -c.s / 4, c.s * Math.abs(Math.cos(c.rot)) * 0.9 + 2, c.s / 2);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawFeedback() {
   // Keep the LIVE scene (new keeper mid-dive, ball, particles) and draw only the
   // feedback decorations in code — do NOT overlay the baked feedback PNG, which has
@@ -716,18 +1146,212 @@ function drawFeedback() {
   scanlines();
 }
 
-function drawResult() {
-  const im = G.score === 1 ? IMG.result1 : G.score === 2 ? IMG.result2 : IMG.result3;
-  drawImageFill(im, 0, 0, CW, CH);
-  // PLAY AGAIN button hotspot region: baked into the image near bottom-center.
-  // If replay already used, dim & disable it.
-  if (G.replayed) {
-    ctx.fillStyle = "rgba(6,10,30,0.55)";
-    // cover the button area (approx bottom-center of the 2304x1440 -> our CW/CH)
-    const bw = CW*0.30, bh = CH*0.075, bx = (CW-bw)/2, by = CH*0.86;
-    roundRect(bx, by, bw, bh, 40); ctx.fill();
-    outlineText("SELESAI", CW/2, by + bh/2 + 2, 44, "#999", 3, NAVY);
+/* Prize reveal — re-drawn in code (ported from build_scripts/result.py) over the
+   stadium/trophy backdrop, so each piece can pop in on its own timeline:
+   flash → headline → score dots tick in → panel scales in → prize rows pop one-by-one
+   (each stamping a checkmark) → confetti → MAIN LAGI button fades in last. */
+const RESULT_STATES = {
+  0: { headline: "SAYANG!",  dots: ["save","save","save"],
+       prizes: [] },
+  1: { headline: "GOAL!",    dots: ["goal","save","save"],
+       prizes: [["AI FREE LEARNING","ai"], ["REVOU STARTER KIT","box"]] },
+  2: { headline: "GOOOAL!",  dots: ["goal","goal","save"],
+       prizes: [["BNSP CERTIFICATION","cert"], ["REVOU STARTER KIT","box"]] },
+  3: { headline: "PERFECT!", dots: ["goal","goal","goal"],
+       prizes: [["BNSP CERTIFICATION","cert"], ["AI FREE LEARNING","ai"], ["REVOU STARTER KIT","box"]] },
+};
+let resultCheer = false;
+// reveal timeline offsets (ms)
+const R_HEAD = 150, R_DOTS = 500, R_PANEL = 850, R_ROW0 = 1150, R_ROW_GAP = 260, R_BTN_AFTER = 300;
+
+function ballDotResult(cx, cy, r, state, appear) {
+  ctx.save();
+  ctx.translate(cx, cy); ctx.scale(appear, appear); ctx.translate(-cx, -cy);
+  ctx.fillStyle = "rgba(245,245,248,1)";
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  ctx.fillStyle = "#282c3c"; ctx.beginPath(); ctx.arc(cx, cy, r*0.34, 0, 7); ctx.fill();
+  if (state === "goal") {
+    ctx.strokeStyle = GREEN; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(cx, cy, r+4, 0, 7); ctx.stroke();
+    ctx.lineWidth = 9; ctx.beginPath();
+    ctx.moveTo(cx-r*0.45, cy+2); ctx.lineTo(cx-r*0.08, cy+r*0.42); ctx.lineTo(cx+r*0.5, cy-r*0.42); ctx.stroke();
+  } else {
+    ctx.strokeStyle = RED; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(cx, cy, r+4, 0, 7); ctx.stroke();
+    const o = r*0.4; ctx.lineWidth = 9; ctx.beginPath();
+    ctx.moveTo(cx-o,cy-o); ctx.lineTo(cx+o,cy+o); ctx.moveTo(cx-o,cy+o); ctx.lineTo(cx+o,cy-o); ctx.stroke();
   }
+  ctx.restore();
+}
+
+function drawPrizeIcon(cx, cy, kind, iconR) {
+  const s = iconR * 1.4;
+  ctx.lineJoin = "round";
+  if (kind === "cert") {
+    const w = s*0.92, h = s*1.05;
+    ctx.fillStyle = WHITE; ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+    roundRect(cx-w, cy-h, w*2, h*2, 10); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = "#8894a6"; ctx.lineWidth = 5;
+    for (let k = 0; k < 3; k++) { const yy = cy-h*0.5+k*h*0.34; ctx.beginPath(); ctx.moveTo(cx-w*0.6, yy); ctx.lineTo(cx+w*0.6, yy); ctx.stroke(); }
+    const sr = s*0.34, scx = cx-w*0.30, scy = cy+h*0.42;
+    ctx.fillStyle = "#e83c3c"; ctx.strokeStyle = NAVY; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(scx-sr*0.4,scy+sr); ctx.lineTo(scx-sr*0.9,scy+sr*2.0); ctx.lineTo(scx-sr*0.05,scy+sr*1.4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(scx+sr*0.4,scy+sr); ctx.lineTo(scx+sr*0.9,scy+sr*2.0); ctx.lineTo(scx+sr*0.05,scy+sr*1.4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = YELLOW; ctx.strokeStyle = NAVY; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(scx, scy, sr, 0, 7); ctx.fill(); ctx.stroke();
+  } else if (kind === "box") {
+    const w = s*0.95, h = s*0.85, top = cy-h*0.35;
+    ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+    ctx.fillStyle = "#e83c50"; ctx.fillRect(cx-w, top, w*2, (cy+h)-top); ctx.strokeRect(cx-w, top, w*2, (cy+h)-top);
+    ctx.fillStyle = "#ff789c"; ctx.fillRect(cx-w*1.08, top-h*0.28, w*2.16, h*0.28); ctx.strokeRect(cx-w*1.08, top-h*0.28, w*2.16, h*0.28);
+    ctx.fillStyle = YELLOW; ctx.lineWidth = 4;
+    ctx.fillRect(cx-w*0.15, top-h*0.28, w*0.30, (cy+h)-(top-h*0.28)); ctx.strokeRect(cx-w*0.15, top-h*0.28, w*0.30, (cy+h)-(top-h*0.28));
+    const br = s*0.30;
+    ctx.beginPath(); ctx.ellipse(cx-w*0.15-br*0.8, top-h*0.28-br*0.6, br*0.8, br*0.8, 0, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cx+w*0.15+br*0.8, top-h*0.28-br*0.6, br*0.8, br*0.8, 0, 0, 7); ctx.fill(); ctx.stroke();
+  } else { // ai lightbulb
+    const r2 = s*0.82;
+    ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+    ctx.fillStyle = "#78c8ff";
+    ctx.beginPath(); ctx.ellipse(cx, cy-r2*0.25, r2*0.75, r2*0.75, 0, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#b4b4be"; ctx.fillRect(cx-r2*0.32, cy+r2*0.2, r2*0.64, r2*0.52); ctx.strokeRect(cx-r2*0.32, cy+r2*0.2, r2*0.64, r2*0.52);
+    ctx.fillStyle = "#8894a6"; ctx.fillRect(cx-r2*0.32, cy+r2*0.72, r2*0.64, r2*0.23); ctx.strokeRect(cx-r2*0.32, cy+r2*0.72, r2*0.64, r2*0.23);
+    ctx.strokeStyle = YELLOW; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(cx, cy-r2*0.5); ctx.lineTo(cx, cy+r2*0.15); ctx.stroke();
+    ctx.lineWidth = 5;
+    [[cx-r2*1.15, cy-r2*0.6, r2*0.26],[cx-r2*0.9, cy+r2*0.55, r2*0.18]].forEach(([sx,sy,ss]) => {
+      ctx.beginPath(); ctx.moveTo(sx-ss,sy); ctx.lineTo(sx+ss,sy); ctx.moveTo(sx,sy-ss); ctx.lineTo(sx,sy+ss); ctx.stroke();
+    });
+  }
+}
+
+// PLAY AGAIN button rect (shared by draw + hit test)
+function resultButtonRect() {
+  const st = RESULT_STATES[G.score] || RESULT_STATES[1];
+  const nP = st.prizes.length;
+  const pw = CW*0.70, ph = CH*(0.22 + 0.135*nP);
+  const py = (nP < 3 ? CH*0.30 : CH*0.285);
+  const bw = CW*0.28, bh = CH*0.08, bx = (CW-bw)/2, by = py + ph + CH*0.03;
+  return { bx, by, bw, bh, pw, ph, py };
+}
+
+function drawResult() {
+  const st = RESULT_STATES[G.score] || RESULT_STATES[1];
+  const nP = st.prizes.length;
+  const t = G.t;
+
+  // backdrop = stadium/trophy (reuse title bg), dimmed like the mockup
+  drawImageFill(IMG.title_bg, 0, 0, CW, CH);
+  ctx.fillStyle = "rgba(6,10,30,0.42)"; ctx.fillRect(0, 0, CW, CH);
+
+  // opening flash
+  if (t < 350) { ctx.save(); ctx.globalAlpha = (1 - t/350) * 0.5; ctx.fillStyle = "#fff"; ctx.fillRect(0,0,CW,CH); ctx.restore(); }
+
+  // ---- headline (punch-in) ----
+  const hP = Math.min(1, Math.max(0, (t - R_HEAD) / 300));
+  if (hP > 0) {
+    const sc = 0.6 + 0.4 * easeOutBack(hP);
+    ctx.save(); ctx.globalAlpha = Math.min(1, hP*1.5);
+    ctx.translate(CW/2, CH*0.095); ctx.scale(sc, sc);
+    outlineText(st.headline, 0, 0, Math.round(CH*0.11), YELLOW, 7, NAVY);
+    ctx.restore();
+  }
+
+  // ---- score line + dots ----
+  const dP = Math.min(1, Math.max(0, (t - R_DOTS) / 400));
+  if (dP > 0) {
+    ctx.save(); ctx.globalAlpha = dP;
+    outlineText("SKOR KAMU:  " + G.score + " / 3", CW/2, CH*0.205, Math.round(CH*0.05), WHITE, 5, NAVY);
+    ctx.restore();
+    const r = CH*0.022, gap = r*3.4, cy = CH*0.265, cx0 = CW/2 - gap;
+    for (let i = 0; i < 3; i++) {
+      const da = Math.min(1, Math.max(0, (t - (R_DOTS + i*140)) / 260));
+      if (da > 0) ballDotResult(cx0 + i*gap, cy, r, st.dots[i], easeOutBack(da));
+    }
+  }
+
+  // ---- prize panel (scale-in) ----
+  const pw = CW*0.70, ph = CH*(0.22 + 0.135*nP), px = (CW-pw)/2;
+  const py = (nP < 3 ? CH*0.30 : CH*0.285);
+  const paP = Math.min(1, Math.max(0, (t - R_PANEL) / 320));
+  if (paP > 0 && nP > 0) {
+    const psc = 0.7 + 0.3 * easeOutBack(paP);
+    ctx.save(); ctx.globalAlpha = paP;
+    ctx.translate(px + pw/2, py + ph/2); ctx.scale(psc, psc); ctx.translate(-(px + pw/2), -(py + ph/2));
+    // panel
+    ctx.fillStyle = "rgba(14,20,52,0.94)"; roundRect(px, py, pw, ph, 40); ctx.fill();
+    ctx.strokeStyle = YELLOW; ctx.lineWidth = 8; roundRect(px, py, pw, ph, 40); ctx.stroke();
+    // yellow header bar
+    const rh = ph*0.15;
+    ctx.fillStyle = YELLOW; roundRect(px, py, pw, rh, 40); ctx.fill(); ctx.fillRect(px, py+rh-40, pw, 40);
+    outlineText("KAMU MENANG!", px+pw/2, py+rh/2, Math.round(rh*0.55), NAVY, 0, NAVY);
+    ctx.restore();
+
+    // ---- prize rows (each pops in after the panel) ----
+    const bodyTop = py + rh, bodyH = ph - rh, rowH = bodyH/nP;
+    const iconR = rowH*0.30, lx = px + pw*0.11;
+    for (let i = 0; i < nP; i++) {
+      const rowP = Math.min(1, Math.max(0, (t - (R_ROW0 + i*R_ROW_GAP)) / 320));
+      if (rowP <= 0) continue;
+      const ry = bodyTop + i*rowH + rowH/2;
+      const slide = (1 - easeOut(rowP)) * CW * 0.06;   // slide in from the right a touch
+      ctx.save(); ctx.globalAlpha = rowP; ctx.translate(slide, 0);
+      // green checkmark badge (stamp overshoot)
+      const cr = iconR*0.7, stampSc = easeOutBack(rowP);
+      ctx.save(); ctx.translate(lx, ry); ctx.scale(stampSc, stampSc); ctx.translate(-lx, -ry);
+      ctx.fillStyle = GREEN; ctx.beginPath(); ctx.arc(lx, ry, cr, 0, 7); ctx.fill();
+      ctx.strokeStyle = WHITE; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(lx, ry, cr, 0, 7); ctx.stroke();
+      ctx.lineWidth = 8; ctx.beginPath();
+      ctx.moveTo(lx-cr*0.42, ry+cr*0.05); ctx.lineTo(lx-cr*0.05, ry+cr*0.42); ctx.lineTo(lx+cr*0.5, ry-cr*0.4); ctx.stroke();
+      ctx.restore();
+      // prize icon
+      const icx = lx + pw*0.11;
+      drawPrizeIcon(icx, ry, st.prizes[i][1], iconR);
+      // label (auto-shrink to fit)
+      const textX = icx + pw*0.09, maxW = (px + pw - 40) - textX;
+      let fsz = Math.round(rowH*0.26);
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif";
+      while (ctx.measureText(st.prizes[i][0]).width > maxW && fsz > 12) { fsz -= 2; ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif"; }
+      ctx.fillStyle = WHITE; ctx.fillText(st.prizes[i][0], textX, ry);
+      ctx.restore();
+    }
+  }
+
+  // ---- confetti + cheer once all rows shown ----
+  const allRowsAt = R_ROW0 + nP*R_ROW_GAP;
+  if (t >= allRowsAt && !resultCheer && nP > 0) {
+    resultCheer = true;
+    spawnConfetti(90, true);
+    if (SND_PLAY.cheer) SND_PLAY.cheer();
+  }
+  drawConfetti();
+
+  // ---- footer: replay (only on a 0-goal miss) OR claim instructions (any prize) ----
+  // Replay is offered exactly once, and only when the player scored nothing.
+  const canReplay = (G.score === 0 && !G.replayed);
+  const bw = CW*0.28, bh = CH*0.08, bx = (CW-bw)/2, by = py + ph + CH*0.03;
+  const btnP = Math.min(1, Math.max(0, (t - (allRowsAt + R_BTN_AFTER)) / 320));
+  if (btnP > 0) {
+    ctx.save(); ctx.globalAlpha = btnP;
+    if (canReplay) {
+      // encouraging line above the button
+      outlineText("Kamu punya 1 kesempatan lagi!", CW/2, by - CH*0.055,
+        Math.round(CH*0.042), YELLOW, 5, NAVY);
+      const bp = 1 + Math.sin(animClock/300) * 0.02;   // gentle pulse to invite the tap
+      ctx.save();
+      ctx.translate(CW/2, by+bh/2); ctx.scale(bp, bp); ctx.translate(-CW/2, -(by+bh/2));
+      ctx.fillStyle = YELLOW; roundRect(bx, by, bw, bh, bh/2); ctx.fill();
+      ctx.strokeStyle = NAVY; ctx.lineWidth = 7; roundRect(bx, by, bw, bh, bh/2); ctx.stroke();
+      outlineText("MAIN LAGI", CW/2, by + bh/2, Math.round(bh*0.44), NAVY, 0, NAVY);
+      ctx.restore();
+    } else {
+      // Won a prize (or replay already used): show how to claim it. No button.
+      const claim = "Klaim hadiahmu dengan menunjukkan hasil ini ke Admission Counselor kamu.";
+      const cy = by + bh*0.4, cw = pw, csz = Math.round(CH*0.038);
+      wrapOutlineText(claim, CW/2, cy, cw, csz*1.35, csz, YELLOW, 5, NAVY);
+    }
+    ctx.restore();
+  }
+
   scanlines();
 }
 
@@ -755,12 +1379,13 @@ function scanlines() {
    ============================================================ */
 function lockZone(zoneIdx) {
   G.chosenZone = zoneIdx;
-  SFX.click();
+  uiClick();
   setScreen("power");
 }
 function lockPower() {
   G.power = oscValue();
   SFX.kick();
+  if (SND_PLAY.kick) SND_PLAY.kick();   // real ball-strike thump layered under the synth
   fireShot();
 }
 function fireShot() {
@@ -804,10 +1429,15 @@ function resolveShot() {
   if (goal) {
     G.netRipple = 1;
     spawnBurst(G.ball.x, G.ball.y, YELLOW, 40);
+    spawnConfetti(70, true);          // celebration rain
+    crowdRoar = 1;                    // crowd leaps up
     SFX.goal();
+    if (SND_PLAY.cheer) SND_PLAY.cheer();
   } else {
     spawnBurst(G.ball.x, G.ball.y, "#ddd", 24);
+    crowdRoar = Math.max(crowdRoar, 0.25);   // small murmur, not a roar
     SFX.save();
+    if (SND_PLAY.groan) SND_PLAY.groan();
   }
   setScreen("feedback");
 }
@@ -831,16 +1461,26 @@ let animClock = 0;   // continuous clock for idle keeper breathing
 function update(dt) {
   G.t += dt;
   animClock += dt;
+  // screen fade-in
+  if (G.transT < 1) G.transT = Math.min(1, G.transT + dt / 380);
   // oscillator advances only during aim/power
   if (G.screen === "aim" || G.screen === "power") powerPhase += dt / 1000 * Math.PI * 3;
 
   // decay fx
   if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 0.06);
   if (G.netRipple > 0) G.netRipple = Math.max(0, G.netRipple - dt * 0.003);
+  if (crowdRoar > 0) crowdRoar = Math.max(0, crowdRoar - dt * 0.0006);
   for (const p of G.particles) {
     p.x += p.vx; p.y += p.vy; p.vy += 0.5; p.life -= dt;
   }
   G.particles = G.particles.filter(p => p.life > 0);
+
+  // confetti (celebration) — gentle fall + flutter + spin
+  for (const c of G.confetti) {
+    c.x += c.vx; c.y += c.vy; c.vy += 0.06; c.vx += Math.sin((animClock + c.seed) / 300) * 0.05;
+    c.rot += c.vr; c.life -= dt;
+  }
+  G.confetti = G.confetti.filter(c => c.life > 0 && c.y < CH + 40);
 
   if (G.screen === "shooting") {
     const b = G.ball;
@@ -880,6 +1520,17 @@ function render(dt) {
     case "feedback": drawFeedback(); break;
     case "result":   drawResult(); break;
   }
+  drawRevouBadge();   // RevoU logo — persistent on every screen (branding)
+}
+
+// Always-visible RevoU logo, top-left — just the logo, no frame (like the country-select
+// scene). Skipped on "select" — that backdrop already has the RevoU logo baked in.
+function drawRevouBadge() {
+  if (G.screen === "select") return;
+  const im = IMG.revou; if (!im || !im.width) return;
+  const s = CW * 0.055;                          // logo size
+  const pad = CW * 0.018;
+  ctx.drawImage(im, pad, pad, s, s);
 }
 
 /* ============================================================
@@ -923,16 +1574,17 @@ function onMove(x, y) {
 }
 function onTap(x, y) {
   audio(); // unlock on first gesture
+  loadSamples(); // decode AI SFX after the unlock gesture
   switch (G.screen) {
     case "title":
-      SFX.click(); setScreen("select"); break;
+      uiClick(); openEmailGate(); break;
     case "select": {
       const r = rectAt(x, y);
-      if (r) { SFX.click(); G.shooter = r.country; assignRival(); startNewGame(); setScreen("vs"); }
+      if (r) { uiClick(); G.shooter = r.country; assignRival(); startNewGame(); setScreen("vs"); }
       break;
     }
     case "vs":
-      SFX.click(); setScreen("aim"); break;
+      uiClick(); setScreen("aim"); break;
     case "aim": {
       const zi = zoneAt(x, y);
       if (zi >= 0) lockZone(zi);
@@ -941,11 +1593,12 @@ function onTap(x, y) {
     case "power":
       lockPower(); break;
     case "result": {
-      if (!G.replayed) {
-        // PLAY AGAIN button hotspot (bottom-center)
-        const bw = CW*0.30, bh = CH*0.09, bx = (CW-bw)/2, by = CH*0.83;
-        if (x >= bx && x <= bx+bw && y >= by && y <= by+bh) {
-          SFX.click();
+      if (G.score === 0 && !G.replayed) {
+        // PLAY AGAIN button hotspot (matches the code-drawn button)
+        const b = resultButtonRect();
+        // generous vertical padding so the tap lands even before the button fully fades in
+        if (x >= b.bx && x <= b.bx+b.bw && y >= b.by-10 && y <= b.by+b.bh+10) {
+          uiClick();
           G.replayed = true;
           G.shooter = null; G.rival = null;
           setScreen("select");
@@ -969,16 +1622,16 @@ canvas.addEventListener("touchstart", e => {
 window.addEventListener("keydown", e => {
   if (e.code !== "Space" && e.code !== "Enter") return;
   e.preventDefault();
-  audio();
+  audio(); loadSamples();
   switch (G.screen) {
-    case "title":  SFX.click(); setScreen("select"); break;
-    case "vs":     SFX.click(); setScreen("aim"); break;
+    case "title":  uiClick(); openEmailGate(); break;
+    case "vs":     uiClick(); setScreen("aim"); break;
     case "aim":
       if (G.hoverZone >= 0) lockZone(G.hoverZone);
       break;
     case "power":  lockPower(); break;
     case "result":
-      if (!G.replayed) { SFX.click(); G.replayed = true; G.shooter = null; G.rival = null; setScreen("select"); }
+      if (G.score === 0 && !G.replayed) { uiClick(); G.replayed = true; G.shooter = null; G.rival = null; setScreen("select"); }
       break;
     // select needs a specific flag -> keyboard can't pick; ignore
   }
@@ -990,8 +1643,9 @@ window.addEventListener("keydown", e => {
 function fitCanvas() {
   const vw = window.innerWidth, vh = window.innerHeight;
   const scale = Math.min(vw / CW, vh / CH);
-  canvas.style.width = (CW * scale) + "px";
-  canvas.style.height = (CH * scale) + "px";
+  const w = CW * scale, h = CH * scale;
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
 }
 const rotateEl = document.getElementById("rotate");
 function isMobile() {
@@ -1006,6 +1660,45 @@ function checkOrientation() {
 }
 window.addEventListener("resize", () => { fitCanvas(); checkOrientation(); });
 window.addEventListener("orientationchange", () => { setTimeout(() => { fitCanvas(); checkOrientation(); }, 100); });
+
+/* ============================================================
+   EMAIL GATE UI WIRING
+   ============================================================ */
+const gateEl   = document.getElementById("emailGate");
+const inputEl  = document.getElementById("emailInput");
+const errEl    = document.getElementById("emailErr");
+const submitEl = document.getElementById("emailBtn");
+
+function openEmailGate() {
+  errEl.textContent = "";
+  inputEl.value = "";
+  submitEl.disabled = false;
+  gateEl.classList.add("show");
+  paused = true;                        // freeze the render loop behind the overlay
+  setTimeout(() => inputEl.focus(), 50);
+}
+function closeEmailGate() {
+  gateEl.classList.remove("show");
+  paused = false;
+  last = 0;                             // reset dt so no huge jump after resume
+}
+function submitEmail() {
+  const email = (inputEl.value || "").trim().toLowerCase();
+  if (!validEmail(email)) { errEl.textContent = "Masukkan email yang valid."; return; }
+  if (isEmailUsed(email)) { errEl.textContent = "Email ini sudah dipakai. 1 email = 1 kesempatan."; return; }
+  PLAYER_EMAIL = email;
+  markEmailUsed(email);
+  submitEl.disabled = true;
+  uiClick();
+  closeEmailGate();
+  setScreen("select");
+}
+submitEl.addEventListener("click", submitEmail);
+inputEl.addEventListener("keydown", e => {
+  e.stopPropagation();                  // don't let SPACE/ENTER reach the game handler
+  if (e.key === "Enter") submitEmail();
+});
+inputEl.addEventListener("input", () => { errEl.textContent = ""; });
 
 /* ============================================================
    BOOT
