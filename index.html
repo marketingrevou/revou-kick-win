@@ -195,8 +195,7 @@ const ASSET_LIST = {
   result2:    "assets/result_2of3.png",
   result3:    "assets/result_3of3.png",
   k_idle:     "assets/keeper/idle.png",
-  k_left:     "assets/keeper/dive_left.png",
-  k_right:    "assets/keeper/dive_right.png",
+  k_left:     "assets/keeper/dive_left.png",   // flipped in code for right dives
   k_jump:     "assets/keeper/jump.png",
 };
 COUNTRIES.forEach(c => ASSET_LIST["flag_" + c] = "assets/flags/f_" + c + ".png");
@@ -315,8 +314,6 @@ function startNewGame() {
   G.shot = 0; G.results = [null, null, null]; G.score = 0;
   G.target = weightedTarget();
   G.schedule = buildSchedule(G.target);
-  if (window.__forceAll === "save") G.schedule = [false, false, false];  // debug
-  if (window.__forceAll === "goal") { G.schedule = [true, true, true]; G.target = 3; } // debug
   G.chosenZone = -1; G.hoverZone = -1; G.power = 0;
   G.particles = []; G.shake = 0; G.netRipple = 0;
 }
