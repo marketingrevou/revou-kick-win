@@ -48,35 +48,63 @@
   #loader .bar { margin-top: 3vmin; width: 40vmin; height: 2.4vmin; border: 3px solid #FFDE3D; border-radius: 99px; overflow: hidden; }
   #loader .fill { height: 100%; width: 0%; background: #FFDE3D; transition: width .15s; }
 
-  /* ---------- Mobile landscape gate ---------- */
+  /* ---------- Mobile landscape hint (non-blocking) ---------- */
+  /* A brief toast that fades in on portrait load, then fades away.
+     The game stays playable in portrait — this is only a recommendation. */
   #rotate {
     position: fixed; inset: 0; z-index: 50;
     display: none;
     flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(6, 10, 30, 0.96);
-    backdrop-filter: blur(6px);
+    /* semi-transparent darken, not a solid block */
+    background: rgba(6, 10, 30, 0.55);
+    backdrop-filter: blur(2px);
     color: #FFDE3D; text-align: center; padding: 6vmin;
+    pointer-events: none;                 /* never intercepts taps */
+    opacity: 0; transition: opacity .5s ease;
   }
-  #rotate.show { display: flex; }
+  #rotate.show { display: flex; opacity: 1; }
+
+  /* Shared rotate-phone icon (used by toast + persistent portrait hints) */
   .phone {
-    width: 30vmin; height: 30vmin;
+    width: 26vmin; height: 26vmin; max-width: 140px; max-height: 140px;
     display: flex; align-items: center; justify-content: center;
-    margin-bottom: 5vmin;
+    margin-bottom: 4vmin;
   }
-  .phone svg { width: 100%; height: 100%; animation: rot 2.2s ease-in-out infinite; transform-origin: 50% 50%; }
-  @keyframes rot {
-    0%, 18%   { transform: rotate(0deg); }
-    42%, 78%  { transform: rotate(-90deg); }
+  /* The whole icon tips from upright to landscape and back — a single,
+     readable gesture rather than a full spin. */
+  .phone svg { width: 100%; height: 100%; }
+  /* Only the phone body tips; the guide arrows stay fixed. */
+  .phone svg .tip { transform-origin: 50px 50px;
+    animation: tip 2.6s cubic-bezier(.5,0,.2,1) infinite; }
+  @keyframes tip {
+    0%, 22%   { transform: rotate(0deg); }
+    50%, 72%  { transform: rotate(90deg); }
     100%      { transform: rotate(0deg); }
   }
   #rotate h1 {
-    font-size: 7vmin; color: #FFDE3D;
+    font-size: 6vmin; color: #FFDE3D;
     text-shadow: 3px 3px 0 #141D45, -1px -1px 0 #141D45;
     letter-spacing: 2px;
   }
   #rotate p {
-    font-size: 4vmin; color: #fff; margin-top: 2vmin; font-weight: bold;
+    font-size: 3.4vmin; color: #fff; margin-top: 2vmin; font-weight: bold;
     text-shadow: 2px 2px 0 #141D45;
+  }
+
+  /* ---------- Persistent portrait hints (fill the empty letterbox space) ---------- */
+  .phint {
+    position: fixed; left: 0; right: 0; z-index: 20;
+    display: none;                        /* toggled on for mobile portrait */
+    flex-direction: column; align-items: center; justify-content: center;
+    color: #FFDE3D; text-align: center; pointer-events: none;
+  }
+  .phint.show { display: flex; }
+  #phintTop { top: 0; padding-top: 4vmin; }
+  #phintBottom { bottom: 0; padding-bottom: 4vmin; }
+  .phint .phone { width: 16vmin; height: 16vmin; max-width: 90px; max-height: 90px; margin: 0 0 1.2vmin; opacity: .9; }
+  .phint span {
+    font-size: 3vmin; font-weight: bold; color: #fff;
+    text-shadow: 2px 2px 0 #141D45; letter-spacing: 1px;
   }
 
   /* ---------- Email gate popup ---------- */
@@ -147,20 +175,32 @@
   <div class="bar"><div class="fill" id="loadfill"></div></div>
 </div>
 
+<!-- Reusable rotate-phone icon (phone body tips; guide arrows stay put) -->
+<template id="phoneIcon">
+  <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- static directional arrows framing the motion -->
+    <path d="M12 50 A38 38 0 0 1 26 26" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".75"/>
+    <path d="M26 26 l-9 1 l4 -8 z" fill="#fff" opacity=".75"/>
+    <path d="M88 50 A38 38 0 0 1 74 74" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".75"/>
+    <path d="M74 74 l9 -1 l-4 8 z" fill="#fff" opacity=".75"/>
+    <!-- phone body: this group tips upright -> landscape -->
+    <g class="tip">
+      <rect x="38" y="26" width="24" height="48" rx="5" fill="none" stroke="#FFDE3D" stroke-width="4"/>
+      <rect x="44" y="33" width="12" height="30" fill="#141D45" stroke="#FFDE3D" stroke-width="2"/>
+      <circle cx="50" cy="69" r="2.2" fill="#FFDE3D"/>
+    </g>
+  </svg>
+</template>
+
 <div id="rotate">
-  <div class="phone">
-    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="34" y="14" width="32" height="60" rx="6" fill="none" stroke="#FFDE3D" stroke-width="4"/>
-      <rect x="42" y="22" width="16" height="40" fill="#141D45" stroke="#FFDE3D" stroke-width="2"/>
-      <circle cx="50" cy="68" r="2.4" fill="#FFDE3D"/>
-      <!-- curved rotate arrow -->
-      <path d="M20 86 A34 34 0 0 1 80 86" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="4 4"/>
-      <path d="M80 86 l-2 -8 l8 3 z" fill="#fff"/>
-    </svg>
-  </div>
+  <div class="phone"></div>
   <h1>PUTAR HP KAMU</h1>
-  <p>Mainkan dalam mode landscape</p>
+  <p>Lebih seru main dalam mode landscape</p>
 </div>
+
+<!-- Persistent portrait hints, shown in the letterbox space above/below the game -->
+<div id="phintTop" class="phint"><div class="phone"></div><span>Putar HP untuk main landscape</span></div>
+<div id="phintBottom" class="phint"><div class="phone"></div><span>Putar HP untuk main landscape</span></div>
 
 <div id="emailGate">
   <div id="emailCard">
@@ -1692,16 +1732,42 @@ function fitCanvas() {
   canvas.style.width = w + "px";
   canvas.style.height = h + "px";
 }
-const rotateEl = document.getElementById("rotate");
+const rotateEl   = document.getElementById("rotate");
+const phintTop   = document.getElementById("phintTop");
+const phintBot   = document.getElementById("phintBottom");
+
+// Clone the shared phone icon into every .phone slot.
+(function fillPhoneIcons() {
+  const tpl = document.getElementById("phoneIcon");
+  document.querySelectorAll(".phone").forEach(slot => {
+    slot.appendChild(tpl.content.cloneNode(true));
+  });
+})();
+
 function isMobile() {
   return window.matchMedia("(pointer: coarse)").matches || ("ontouchstart" in window);
 }
+
+let toastTimer = null;
+// Briefly flash the (non-blocking) recommendation toast.
+function flashRotateToast() {
+  rotateEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => rotateEl.classList.remove("show"), 2600);
+}
+
+let wasPortrait = null;
 function checkOrientation() {
   const portrait = window.matchMedia("(orientation: portrait)").matches;
-  const gate = isMobile() && portrait;
-  rotateEl.classList.toggle("show", gate);
-  paused = gate;
-  if (!gate) last = 0; // reset dt so no huge jump after resume
+  const inPortrait = isMobile() && portrait;
+  // Persistent hints live in the letterbox space when the user stays portrait.
+  phintTop.classList.toggle("show", inPortrait);
+  phintBot.classList.toggle("show", inPortrait);
+  // Toast only on the transition into portrait (or first load in portrait).
+  if (inPortrait && wasPortrait !== true) flashRotateToast();
+  if (!inPortrait) rotateEl.classList.remove("show");
+  wasPortrait = inPortrait;
+  // Note: the game is never paused for orientation — landscape is only a recommendation.
 }
 window.addEventListener("resize", () => { fitCanvas(); checkOrientation(); });
 window.addEventListener("orientationchange", () => { setTimeout(() => { fitCanvas(); checkOrientation(); }, 100); });
