@@ -532,8 +532,8 @@ const G = {
 };
 
 function weightedTarget() {
-  // Rigged 2-shot outcome: 1 goal (AI Learning) 30%, 2 goals (BNSP) 70%.
-  return Math.random() < 0.30 ? 1 : 2;
+  // Rigged 2-shot outcome: 1 goal (Diskon Rp500rb) 70%, 2 goals (Diskon Rp1jt) 30%.
+  return Math.random() < 0.70 ? 1 : 2;
 }
 function buildSchedule(target) {
   // choose which of the 2 shots are goals so sum == target, >=1 always
