@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link rel="icon" type="image/png" href="assets/revou-logo.png">
-<link rel="apple-touch-icon" href="assets/revou-logo.png">
+<link rel="icon" type="image/png" href="/assets/revou-logo.png">
+<link rel="apple-touch-icon" href="/assets/revou-logo.png">
 <title>KICK &amp; WIN — RevoU</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -139,7 +139,7 @@
 </div>
 
 <!-- Intro visuals: looped, drawn onto the title canvas frame-by-frame. Hidden from layout. -->
-<video id="introVid" src="assets/intro.mp4" loop muted playsinline preload="auto"
+<video id="introVid" src="/assets/intro.mp4" loop muted playsinline preload="auto"
        style="position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; left:-9999px;"></video>
 
 <div id="loader">
@@ -320,20 +320,20 @@ const SELECT_RECTS = computeSelectGrid();
    ============================================================ */
 const IMG = {};
 const ASSET_LIST = {
-  title_bg:   "assets/title_background.png",
-  logo:       "assets/logo_kickwin_final.png",
-  revou:      "assets/revou-logo.png",
-  select:     "assets/country_select.png",
-  stadium:    "assets/stadium_empty.png",
-  scene:      "assets/scene_clean.png",
-  ball:       "assets/ball.png",
+  title_bg:   "/assets/title_background.png",
+  logo:       "/assets/logo_kickwin_final.png",
+  revou:      "/assets/revou-logo.png",
+  select:     "/assets/country_select.png",
+  stadium:    "/assets/stadium_empty.png",
+  scene:      "/assets/scene_clean.png",
+  ball:       "/assets/ball.png",
   // result cards are now re-drawn in code (over title_bg) for the staggered reveal —
   // the baked result_{1,2,3}of3.png are no longer loaded.
-  k_idle:     "assets/keeper/idle.png",
-  k_left:     "assets/keeper/dive_left.png",   // flipped in code for right dives
-  k_jump:     "assets/keeper/jump.png",
+  k_idle:     "/assets/keeper/idle.png",
+  k_left:     "/assets/keeper/dive_left.png",   // flipped in code for right dives
+  k_jump:     "/assets/keeper/jump.png",
 };
-COUNTRIES.forEach(c => ASSET_LIST["flag_" + c] = "assets/flags/f_" + c + ".png");
+COUNTRIES.forEach(c => ASSET_LIST["flag_" + c] = "/assets/flags/f_" + c + ".png");
 
 function loadAssets(onDone) {
   const keys = Object.keys(ASSET_LIST);
@@ -398,14 +398,14 @@ const SFX = {
    Kept low under a master gain so they enrich, not overwhelm. Everything is gated
    behind audio() (first-gesture unlock). Clips fetch+decode lazily on unlock. */
 const SND_SRC = {
-  ambience: "assets/sfx/crowd_ambience.mp3",
-  cheer:    "assets/sfx/cheer.mp3",
-  groan:    "assets/sfx/groan.mp3",
-  kick:     "assets/sfx/kick.mp3",
-  whistle:  "assets/sfx/whistle.mp3",
-  music:    "assets/sfx/menu_music.mp3",   // upbeat menu anthem (title -> VS)
-  pop:      "assets/sfx/pop.mp3",           // friendly UI click (replaces synth beep)
-  vs_swell: "assets/sfx/vs_swell.mp3",      // VS slam impact swell
+  ambience: "/assets/sfx/crowd_ambience.mp3",
+  cheer:    "/assets/sfx/cheer.mp3",
+  groan:    "/assets/sfx/groan.mp3",
+  kick:     "/assets/sfx/kick.mp3",
+  whistle:  "/assets/sfx/whistle.mp3",
+  music:    "/assets/sfx/menu_music.mp3",   // upbeat menu anthem (title -> VS)
+  pop:      "/assets/sfx/pop.mp3",           // friendly UI click (replaces synth beep)
+  vs_swell: "/assets/sfx/vs_swell.mp3",      // VS slam impact swell
 };
 const SND_GAIN = { ambience: 0.30, cheer: 0.55, groan: 0.5, kick: 0.6, whistle: 0.45, music: 0.34, pop: 0.5, vs_swell: 0.5 };
 const SND = {};           // key -> AudioBuffer
@@ -1187,9 +1187,9 @@ const RESULT_STATES = {
   0: { headline: "SAYANG!",  dots: ["save","save"],
        prizes: [] },
   1: { headline: "GOAL!",    dots: ["goal","save"],
-       prizes: [["AI FREE LEARNING","ai"]] },
+       prizes: [["DISKON RP500.000","money"]] },
   2: { headline: "PERFECT!", dots: ["goal","goal"],
-       prizes: [["BNSP CERTIFICATION","cert"]] },
+       prizes: [["DISKON RP1.000.000","money"]] },
 };
 let resultCheer = false;
 // reveal timeline offsets (ms)
@@ -1229,6 +1229,17 @@ function drawPrizeIcon(cx, cy, kind, iconR) {
     ctx.beginPath(); ctx.moveTo(scx+sr*0.4,scy+sr); ctx.lineTo(scx+sr*0.9,scy+sr*2.0); ctx.lineTo(scx+sr*0.05,scy+sr*1.4); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.fillStyle = YELLOW; ctx.strokeStyle = NAVY; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(scx, scy, sr, 0, 7); ctx.fill(); ctx.stroke();
+  } else if (kind === "money") { // gold coin with "Rp"
+    const r2 = s*0.95;
+    ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+    ctx.fillStyle = "#f0b429";
+    ctx.beginPath(); ctx.arc(cx, cy, r2, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = YELLOW;
+    ctx.beginPath(); ctx.arc(cx, cy, r2*0.74, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = NAVY;
+    ctx.font = "900 " + Math.round(r2*0.9) + "px 'Arial Black', Arial, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Rp", cx, cy + r2*0.04);
   } else if (kind === "box") {
     const w = s*0.95, h = s*0.85, top = cy-h*0.35;
     ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
