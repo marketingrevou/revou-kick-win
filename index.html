@@ -1317,8 +1317,18 @@ function drawResult() {
     ctx.restore();
 
     // ---- prize rows (each pops in after the panel) ----
+    // Layout is left-to-right with REAL widths + fixed gaps (not pw fractions) so
+    // the checkmark, icon and label never overlap regardless of row height / label length.
     const bodyTop = py + rh, bodyH = ph - rh, rowH = bodyH/nP;
-    const iconR = rowH*0.30, lx = px + pw*0.11;
+    const iconR = Math.min(rowH*0.26, ph*0.16);        // cap so a single-prize row's icon stays sane
+    const cr = iconR*0.72;                             // checkmark badge radius
+    const padX = pw*0.06;                              // inner horizontal padding
+    const gap  = pw*0.035;                             // gap between check / icon / text
+    const iconHW = iconR*1.4;                          // icon half-width (matches drawPrizeIcon extent)
+    const lx  = px + padX + cr;                        // checkmark center
+    const icx = lx + cr + gap + iconHW;                // icon center
+    const textX = icx + iconHW + gap;                  // label left edge
+    const maxW = (px + pw - padX) - textX;             // room left for the label
     for (let i = 0; i < nP; i++) {
       const rowP = Math.min(1, Math.max(0, (t - (R_ROW0 + i*R_ROW_GAP)) / 320));
       if (rowP <= 0) continue;
@@ -1326,7 +1336,7 @@ function drawResult() {
       const slide = (1 - easeOut(rowP)) * CW * 0.06;   // slide in from the right a touch
       ctx.save(); ctx.globalAlpha = rowP; ctx.translate(slide, 0);
       // green checkmark badge (stamp overshoot)
-      const cr = iconR*0.7, stampSc = easeOutBack(rowP);
+      const stampSc = easeOutBack(rowP);
       ctx.save(); ctx.translate(lx, ry); ctx.scale(stampSc, stampSc); ctx.translate(-lx, -ry);
       ctx.fillStyle = GREEN; ctx.beginPath(); ctx.arc(lx, ry, cr, 0, 7); ctx.fill();
       ctx.strokeStyle = WHITE; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(lx, ry, cr, 0, 7); ctx.stroke();
@@ -1334,11 +1344,9 @@ function drawResult() {
       ctx.moveTo(lx-cr*0.42, ry+cr*0.05); ctx.lineTo(lx-cr*0.05, ry+cr*0.42); ctx.lineTo(lx+cr*0.5, ry-cr*0.4); ctx.stroke();
       ctx.restore();
       // prize icon
-      const icx = lx + pw*0.11;
       drawPrizeIcon(icx, ry, st.prizes[i][1], iconR);
-      // label (auto-shrink to fit)
-      const textX = icx + pw*0.09, maxW = (px + pw - 40) - textX;
-      let fsz = Math.round(rowH*0.26);
+      // label (auto-shrink to fit remaining width)
+      let fsz = Math.round(iconR*0.85);
       ctx.textAlign = "left"; ctx.textBaseline = "middle";
       ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif";
       while (ctx.measureText(st.prizes[i][0]).width > maxW && fsz > 12) { fsz -= 2; ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif"; }
