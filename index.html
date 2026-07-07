@@ -10,6 +10,9 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
+    /* Fill the *visible* viewport on mobile (excludes the collapsible toolbar area
+       that plain 100% ignores). dvh updates as the browser chrome collapses. */
+    height: 100dvh;
     /* Framed backdrop: navy radial glow so letterboxing reads as intentional. */
     background:
       radial-gradient(ellipse 120% 120% at 50% 38%, #1b2a63 0%, #101a44 42%, #0a1230 72%, #060a1e 100%);
@@ -1725,7 +1728,11 @@ window.addEventListener("keydown", e => {
    RESPONSIVE SIZING + mobile landscape gate
    ============================================================ */
 function fitCanvas() {
-  const vw = window.innerWidth, vh = window.innerHeight;
+  // Prefer visualViewport — on mobile it reports the true visible area
+  // (below the collapsible toolbar), unlike innerWidth/innerHeight.
+  const vv = window.visualViewport;
+  const vw = vv ? vv.width  : window.innerWidth;
+  const vh = vv ? vv.height : window.innerHeight;
   // Leave a small margin so the framed canvas floats inside the navy backdrop.
   const pad = Math.round(Math.min(vw, vh) * 0.03);
   const availW = vw - pad * 2, availH = vh - pad * 2;
@@ -1773,6 +1780,25 @@ function checkOrientation() {
 }
 window.addEventListener("resize", () => { fitCanvas(); checkOrientation(); });
 window.addEventListener("orientationchange", () => { setTimeout(() => { fitCanvas(); checkOrientation(); }, 100); });
+// Re-fit as the mobile browser toolbar collapses/expands (fires without a window resize).
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitCanvas);
+  window.visualViewport.addEventListener("scroll", fitCanvas);
+}
+
+/* Best-effort true fullscreen on the first user tap (Android/Chrome).
+   Must be gesture-triggered; silently no-ops on iOS Safari, which doesn't
+   support element fullscreen. dvh/visualViewport handle iOS instead. */
+let fullscreenTried = false;
+function tryEnterFullscreen() {
+  if (fullscreenTried) return;
+  fullscreenTried = true;
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (req) { try { req.call(el); } catch (_) {} }
+}
+window.addEventListener("touchend", tryEnterFullscreen, { once: true, passive: true });
+window.addEventListener("click", tryEnterFullscreen, { once: true });
 
 /* ============================================================
    EMAIL GATE UI WIRING
