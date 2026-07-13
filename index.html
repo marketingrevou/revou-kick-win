@@ -287,6 +287,83 @@ const CW = 2148, CH = 1198;
 const YELLOW = "#FFDE3D", NAVY = "#141D45", NAVY_D = "#0b1230", WHITE = "#ffffff";
 const GREEN = "#3cd25a", RED = "#e83c3c";
 
+/* ---- Portrait 1:1 "square" viewport ----------------------------------------
+   On a portrait phone the native 2148x1198 (1.79:1) art is drawn into a SQUARE
+   canvas via a per-screen CAMERA: a native-space rect [cx0,cx1] x [cy0,cy1] that
+   is mapped square. That single ctx transform (applied at the top of render(),
+   inverted in canvasPos()) means every existing draw call & hit-test keeps
+   working in native CW x CH coordinates.
+
+   Different screens want different crops:
+     - gameplay  -> zoom into the goal (narrow the width, anchor high) so the
+                    goal/keeper/ball read big; the ball spot near the bottom stays
+                    in frame. Extra height above/below is filled with sky/grass.
+     - composed  -> show the full native width (nothing at the edges is clipped:
+                    VS flags, prize panel) and center it vertically.
+   `portView(screen)` returns the crop for the current screen; recomputeCam()
+   turns it into the scale/offset used by render() + canvasPos(). */
+const PORT = {
+  on: false,          // true when rendering into the square portrait view
+  side: 0,            // square backing-store edge (px) — always CW while on
+  // active camera (native-space visible rect + derived transform)
+  cx0: 0, cx1: CW, cy0: 0, cy1: CH,
+  scale: 1,           // native-px -> square-px
+  ox: 0, oy: 0,       // square-px offset (translation)
+  // legacy aliases used by band fills / full-viewport helpers
+  vy0: 0, vy1: CH,
+};
+// Fraction of the portrait square reserved at the BOTTOM for the gameplay HUD strip
+// (power bar + help text). The zoomed scene fills the area above it.
+const GP_HUD = 0.20;
+// Per-screen crop rect in NATIVE coords. The square will show exactly this rect.
+function portView(screen) {
+  if (screen === "aim" || screen === "power" || screen === "shooting" || screen === "feedback") {
+    // Zoomed gameplay. The scene fills the TOP portion of the square; the bottom
+    // GP_HUD fraction is a solid strip that holds the power bar + help text (so the
+    // scene sits lower and there's no empty grass gap). We crop a WIDE-but-short slice
+    // of the pitch (from just below the top of the art down through the ball spot) and
+    // map it to the upper (1 - GP_HUD) band of the square.
+    const w = CW * 0.68;                       // zoom width (unchanged)
+    const cx0 = (CW - w) / 2, cx1 = cx0 + w;
+    const cyTop = CH * 0.03;                    // top of the visible pitch slice
+    const cyBot = CH * 0.99;                    // just past the ball spot (~0.92)
+    return { cx0, cx1, cy0: cyTop, cy1: cyBot, hud: GP_HUD };   // non-square -> letterbox handled below
+  }
+  // composed screens (title/select/vs/result): full width, vertically centered square
+  return { cx0: 0, cx1: CW, cy0: (CH - CW) / 2, cy1: (CH - CW) / 2 + CW };
+}
+function recomputeCam() {
+  const v = portView(G.screen);
+  PORT.cx0 = v.cx0; PORT.cx1 = v.cx1; PORT.cy0 = v.cy0; PORT.cy1 = v.cy1;
+  const cw = v.cx1 - v.cx0, ch = v.cy1 - v.cy0;
+  PORT.hud = v.hud || 0;
+  if (v.hud) {
+    // Gameplay: fit the crop WIDTH to the square (uniform scale, no distortion). The
+    // scene then occupies cw-worth of width and ch*scale of height from the top; the
+    // rest of the square below it is the HUD strip. Anchor so the scene's TOP is at
+    // the top of the square (scene sits low, fills more) and clamp so we don't create
+    // a gap above if the scene is shorter than the non-HUD area.
+    PORT.scale = PORT.side / cw;
+    PORT.ox = -v.cx0 * PORT.scale;
+    const sceneH = ch * PORT.scale;                 // scene height in square px
+    const availH = PORT.side * (1 - PORT.hud);      // area above the HUD strip
+    // push the scene down so its bottom sits at the top of the HUD strip
+    PORT.oy = availH - sceneH - v.cy0 * PORT.scale;
+  } else {
+    // composed screens: fit the (square) crop and center.
+    PORT.scale = Math.min(PORT.side / cw, PORT.side / ch);
+    PORT.ox = (PORT.side - cw * PORT.scale) / 2 - v.cx0 * PORT.scale;
+    PORT.oy = (PORT.side - ch * PORT.scale) / 2 - v.cy0 * PORT.scale;
+  }
+  // visible native-y extent of the square (for band fills spanning full width)
+  PORT.vy0 = -PORT.oy / PORT.scale;
+  PORT.vy1 = (PORT.side - PORT.oy) / PORT.scale;
+  // native-y where the HUD strip begins (top edge of the strip), for gameplay
+  PORT.hudY = PORT.vy0 + (PORT.side * (1 - PORT.hud)) / PORT.scale;
+}
+// legacy shim: older code called recomputePort(); keep it pointing at the camera.
+function recomputePort() { recomputeCam(); }
+
 // goal mouth
 const GX0 = CW * 0.285, GX1 = CW * 0.715;
 const GY0 = CH * 0.44,  GY1 = CH * 0.70;
@@ -359,6 +436,33 @@ function computeSelectGrid() {
   return rects;
 }
 const SELECT_RECTS = computeSelectGrid();
+
+// Portrait select grid: a 3-col x 4-row layout that FILLS the visible square, drawn
+// from the individual flag images (not the baked landscape backdrop). Rects are in
+// native coords within the visible square [0..CW] x [vy0..vy1]; recomputed each draw
+// since vy0/vy1 come from the live camera. Returns [{country,x,y,w,h}].
+function computeSelectGridPortrait() {
+  const cols = 3, rows = 4;
+  const top = PORT.vy0, bot = PORT.vy1, H = bot - top;
+  const headH = H * 0.13;                 // room for the "PILIH NEGARAMU" title
+  const footH = H * 0.07;                 // room for the footer hint
+  const sideM = CW * 0.05, gapX = CW * 0.03, gapY = H * 0.022, nameH = H * 0.03;
+  const gridTop = top + headH, gridH = H - headH - footH;
+  const tileW = (CW - 2 * sideM - (cols - 1) * gapX) / cols;
+  const tileH = (gridH - (rows - 1) * gapY) / rows;
+  const startX = sideM;
+  const rects = [];
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    rects.push({
+      country: COUNTRIES[i],
+      x: startX + c * (tileW + gapX),
+      y: gridTop + r * (tileH + gapY),
+      w: tileW, h: tileH, nameH,
+    });
+  }
+  return rects;
+}
 
 /* ============================================================
    ASSET LOADING
@@ -657,6 +761,28 @@ function drawImageFill(im, dx, dy, dw, dh) {
   if (!im.width) return;
   ctx.drawImage(im, dx, dy, dw, dh);
 }
+// Full-viewport background for composed screens.
+//  - COVER (default): fills the whole square, cropping the image's sides. Good for
+//    decorative backdrops where edge content doesn't matter (title, stadium).
+//  - CONTAIN: fits the full native WIDTH (so nothing horizontal is clipped) and lets
+//    the top/bottom bands show — required when the art carries hit-tested UI at the
+//    edges (the country-select grid), so baked pixels stay aligned with native coords.
+// In landscape both collapse to the normal full-canvas draw.
+function drawBgCover(im, mode) {
+  if (!im || !im.width) return;
+  if (!PORT.on) { ctx.drawImage(im, 0, 0, CW, CH); return; }
+  if (mode === "contain") {
+    // native width fills the square; art keeps its native x-mapping (0..CW), so the
+    // baked grid lines up exactly with SELECT_RECTS. Bands top/bottom are painted
+    // with the backdrop's dark edge tone by the caller-visible clear already.
+    ctx.drawImage(im, 0, 0, CW, CH);
+    return;
+  }
+  const vw = CW, vh = PORT.vy1 - PORT.vy0;
+  const scale = Math.max(vw / im.width, vh / im.height);
+  const w = im.width * scale, h = im.height * scale;
+  ctx.drawImage(im, (CW - w) / 2, PORT.vy0 + (vh - h) / 2, w, h);
+}
 function drawVideoCover(vid, dx, dy, dw, dh) {
   // cover-fit the video into the target rect, cropping the overflow (no letterbox)
   const sw = vid.videoWidth, sh = vid.videoHeight;
@@ -705,37 +831,48 @@ function drawTitle(dt) {
   // Looping intro video as the background; static title_bg is the fallback until
   // the video has decodable frames (and if playback is ever blocked).
   if (introVidReady && introVid.videoWidth) {
-    drawVideoCover(introVid, 0, 0, CW, CH);
+    drawVideoCover(introVid, 0, PORT.on ? PORT.vy0 : 0, CW, PORT.on ? (PORT.vy1 - PORT.vy0) : CH);
   } else {
-    drawImageFill(IMG.title_bg, 0, 0, CW, CH);
+    drawBgCover(IMG.title_bg);
   }
 
   // ---- logo: epic entrance (drop-in + scale overshoot), then gentle float ----
-  const lw0 = CW * 0.62, lh0 = lw0 * (IMG.logo.height / IMG.logo.width);
+  // Portrait fills the square more: bigger logo, centered vertically in the square;
+  // landscape keeps the original composition.
+  const logoFrac = PORT.on ? 0.86 : 0.62;                // wider fill in portrait
+  const lw0 = CW * logoFrac, lh0 = lw0 * (IMG.logo.height / IMG.logo.width);
   const inP = Math.min(1, G.t / 650);
   const scEnter = 0.7 + 0.3 * easeOutBack(inP);          // 0.7 -> ~1 with overshoot
   const dropY = (1 - easeOut(inP)) * -CH * 0.10;         // slides down into place
   const float = Math.sin(animClock / 900) * (CH * 0.010) * inP;  // idle bob after settle
   const lw = lw0 * scEnter, lh = lh0 * scEnter;
+  // vertical anchor: portrait centers the title in the upper-middle of the square,
+  // landscape keeps it near the top of the 1.79:1 frame.
+  const logoTopY = PORT.on ? (PORT.vy0 + (PORT.vy1 - PORT.vy0) * 0.20) : CH * 0.06;
   ctx.save();
   ctx.globalAlpha = inP;
-  ctx.drawImage(IMG.logo, (CW - lw) / 2, CH * 0.06 + dropY + float - (lh - lh0) / 2, lw, lh);
+  ctx.drawImage(IMG.logo, (CW - lw) / 2, logoTopY + dropY + float - (lh - lh0) / 2, lw, lh);
   ctx.restore();
 
-  // ---- blinking + pulsing "CLICK TO START" ----
+  // ---- blinking + pulsing "CLICK TO START" (bigger + lower in portrait) ----
   const blink = (Math.floor(G.t / 500) % 2) === 0;
   if (blink && inP > 0.6) {
     const pulse = 1 + Math.sin(animClock / 260) * 0.04;
-    const bw = CW * 0.30 * pulse, bh = CH * 0.075 * pulse, bx = (CW - bw) / 2, by = CH * 0.86;
+    const bwFrac = PORT.on ? 0.62 : 0.30;
+    const bhFrac = PORT.on ? 0.11 : 0.075;
+    const fsz    = PORT.on ? 84   : 52;
+    const bw = CW * bwFrac * pulse, bh = CH * bhFrac * pulse, bx = (CW - bw) / 2;
+    const by = PORT.on ? (PORT.vy1 - bh - (PORT.vy1 - PORT.vy0) * 0.10) : CH * 0.86;
     ctx.fillStyle = "rgba(10,16,40,0.85)";
-    roundRect(bx, by, bw, bh, 12); ctx.fill();
-    outlineText("CLICK TO START", CW / 2, by + bh / 2 + 4, 52 * pulse, WHITE, 3, NAVY);
+    roundRect(bx, by, bw, bh, 14); ctx.fill();
+    outlineText("CLICK TO START", CW / 2, by + bh / 2 + 4, fsz * pulse, WHITE, 3, NAVY);
   }
   scanlines();
 }
 
 function drawSelect() {
-  drawImageFill(IMG.select, 0, 0, CW, CH);
+  if (PORT.on) { drawSelectPortrait(); return; }
+  drawBgCover(IMG.select);
   // hover highlight on grid cells
   if (G.hoverRect) {
     const r = G.hoverRect;
@@ -745,6 +882,49 @@ function drawSelect() {
     ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
     ctx.restore();
   }
+  scanlines();
+}
+
+// Portrait country select: a 3x4 flag grid that fills the whole square, built from
+// the flag sprites so it scales cleanly (no reliance on the landscape backdrop art).
+function drawSelectPortrait() {
+  // stadium backdrop, dimmed, covering the full square
+  drawBgCover(IMG.stadium);
+  ctx.fillStyle = "rgba(10,16,40,0.68)"; fillViewport();
+
+  const rects = computeSelectGridPortrait();
+  const H = PORT.vy1 - PORT.vy0;
+  // title
+  outlineText("PILIH NEGARAMU", CW / 2, PORT.vy0 + H * 0.075, Math.round(H * 0.052), YELLOW, 5, NAVY);
+
+  for (const r of rects) {
+    const hover = G.hoverRect && G.hoverRect.country === r.country;
+    const flagH = r.h - r.nameH;
+    // tile background
+    ctx.fillStyle = "rgba(14,20,52,0.9)";
+    roundRect(r.x, r.y, r.w, r.h, 12); ctx.fill();
+    // flag (contain-fit in the upper part of the tile)
+    const im = IMG["flag_" + r.country];
+    if (im && im.width) {
+      const pad = r.w * 0.06;
+      const bw = r.w - pad * 2, bh = flagH - pad * 2;
+      const sc = Math.min(bw / im.width, bh / im.height);
+      const nw = im.width * sc, nh = im.height * sc;
+      ctx.drawImage(im, r.x + (r.w - nw) / 2, r.y + pad + (bh - nh) / 2, nw, nh);
+    }
+    // country name under the flag
+    outlineText(CNAME[r.country], r.x + r.w / 2, r.y + flagH + r.nameH / 2,
+      Math.round(r.nameH * 0.62), WHITE, 3, NAVY);
+    // tile keyline / hover glow
+    ctx.save();
+    if (hover) { ctx.strokeStyle = YELLOW; ctx.lineWidth = 8; ctx.shadowColor = YELLOW; ctx.shadowBlur = 26; }
+    else { ctx.strokeStyle = "rgba(255,222,61,0.55)"; ctx.lineWidth = 4; }
+    roundRect(r.x, r.y, r.w, r.h, 12); ctx.stroke();
+    ctx.restore();
+  }
+
+  outlineText("Pilih tim-mu untuk mulai main!", CW / 2, PORT.vy1 - H * 0.04,
+    Math.round(H * 0.032), YELLOW, 4, NAVY);
   scanlines();
 }
 
@@ -777,15 +957,16 @@ function drawVS() {
   ctx.translate(sx, sy);
 
   // dimmed empty-stadium backdrop (NOT the country grid)
-  drawImageFill(IMG.stadium, 0, 0, CW, CH);
-  ctx.fillStyle = "rgba(6,10,30,0.72)"; ctx.fillRect(0, 0, CW, CH);
-  // diagonal blue/red split accents
+  drawBgCover(IMG.stadium);
+  ctx.fillStyle = "rgba(6,10,30,0.72)"; fillViewport();
+  // diagonal blue/red split accents (extend through the portrait bands)
+  const vTop = PORT.on ? PORT.vy0 : 0, vBot = PORT.on ? PORT.vy1 : CH;
   ctx.save();
   ctx.globalAlpha = 0.25;
   ctx.fillStyle = "#2f6fd0";
-  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(CW*0.58,0); ctx.lineTo(CW*0.42,CH); ctx.lineTo(0,CH); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0,vTop); ctx.lineTo(CW*0.58,vTop); ctx.lineTo(CW*0.42,vBot); ctx.lineTo(0,vBot); ctx.closePath(); ctx.fill();
   ctx.fillStyle = "#b02a2a";
-  ctx.beginPath(); ctx.moveTo(CW,0); ctx.lineTo(CW*0.58,0); ctx.lineTo(CW*0.42,CH); ctx.lineTo(CW,CH); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(CW,vTop); ctx.lineTo(CW*0.58,vTop); ctx.lineTo(CW*0.42,vBot); ctx.lineTo(CW,vBot); ctx.closePath(); ctx.fill();
   ctx.restore();
 
   outlineText("GET READY!", CW/2, CH*0.11, 96, YELLOW, 5, NAVY);
@@ -810,16 +991,31 @@ function drawVS() {
     ctx.restore();
   }
 
+  // Portrait squeezes the wide layout into a square, so bump the label/name text up
+  // to stay legible. Names sit a touch lower to clear the (relatively taller) flags.
+  const roleSz = PORT.on ? 74 : 54;      // "KAMU" / "RIVAL KEEPER"
+  const nameSzMax = PORT.on ? 92 : 60;   // country name under the flag (auto-shrunk to fit)
+  const nameDY = PORT.on ? CH*0.075 : CH*0.055;
+  // shrink a name so it fits within the flag-box width at the given max size
+  const fitName = (txt) => {
+    let sz = nameSzMax;
+    ctx.font = "900 " + sz + "px 'Arial Black', Arial, sans-serif";
+    while (ctx.measureText(txt).width > fw * 0.98 && sz > 24) {
+      sz -= 2; ctx.font = "900 " + sz + "px 'Arial Black', Arial, sans-serif";
+    }
+    return sz;
+  };
+
   ctx.save(); ctx.translate(loff, 0);
-  outlineText("KAMU", lx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  outlineText("KAMU", lx + fw/2, CH*0.24, roleSz, WHITE, 4, NAVY);
   drawFlagInBox(G.shooter, lx, fy, fw, fh);
-  outlineText(CNAME[G.shooter], lx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  outlineText(CNAME[G.shooter], lx + fw/2, fy + fh + nameDY, fitName(CNAME[G.shooter]), YELLOW, 4, NAVY);
   ctx.restore();
 
   ctx.save(); ctx.translate(roff, 0);
-  outlineText("RIVAL KEEPER", rx + fw/2, CH*0.24, 54, WHITE, 4, NAVY);
+  outlineText("RIVAL KEEPER", rx + fw/2, CH*0.24, roleSz, WHITE, 4, NAVY);
   drawFlagInBox(G.rival,  rx, fy, fw, fh);
-  outlineText(CNAME[G.rival],  rx + fw/2, fy + fh + CH*0.055, 60, YELLOW, 4, NAVY);
+  outlineText(CNAME[G.rival],  rx + fw/2, fy + fh + nameDY, fitName(CNAME[G.rival]), YELLOW, 4, NAVY);
   ctx.restore();
 
   // VS badge center — pops with overshoot right at impact
@@ -836,9 +1032,14 @@ function drawVS() {
   outlineText("VS", bx, by + 4, 72, YELLOW, 3, NAVY);
   ctx.restore();
 
-  outlineText("Cetak 2 gol untuk memenangkan hadiah terbaik!", CW/2, CH*0.80, 40, WHITE, 3, NAVY);
+  // tagline: wrap + enlarge in portrait so it isn't a tiny single line
+  if (PORT.on) {
+    wrapOutlineText("Cetak 2 gol untuk memenangkan hadiah terbaik!", CW/2, CH*0.86, CW*0.86, 62, 52, WHITE, 3, NAVY);
+  } else {
+    outlineText("Cetak 2 gol untuk memenangkan hadiah terbaik!", CW/2, CH*0.80, 40, WHITE, 3, NAVY);
+  }
   const blink = (Math.floor(G.t / 500) % 2) === 0;
-  if (bang && blink) outlineText("TAP TO KICK OFF", CW/2, CH*0.90, 56, YELLOW, 4, NAVY);
+  if (bang && blink) outlineText("TAP TO KICK OFF", CW/2, PORT.on ? CH*1.02 : CH*0.90, PORT.on ? 72 : 56, YELLOW, 4, NAVY);
 
   ctx.restore();   // shake
 
@@ -847,7 +1048,7 @@ function drawVS() {
     ctx.save();
     ctx.globalAlpha = (1 - bangT / 220) * 0.6;
     ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, CW, CH);
+    fillViewport();
     ctx.restore();
   }
   scanlines();
@@ -947,21 +1148,30 @@ function drawLiveCrowd() {
 }
 
 // Single-line guide, no frame — shows ONLY the current step's instruction.
+// In portrait it lives at the bottom of the HUD strip.
 function drawGuide() {
   const txt = G.screen === "aim"
     ? "PILIH TARGET, LALU KLIK"
     : "ATUR POWER — KLIK / SPASI";
-  outlineText(txt, CW / 2, CH - 40, 42, YELLOW, 4, NAVY);
+  const y = PORT.on ? (PORT.vy1 - (PORT.vy1 - PORT.hudY) * 0.13) : (CH - 40);
+  const sz = PORT.on ? Math.round((PORT.vy1 - PORT.hudY) * 0.16) : 42;
+  outlineText(txt, CW / 2, y, sz, YELLOW, 4, NAVY);
 }
 
 function drawScoreboard() {
-  const cx0 = CW/2 - SB_GAP/2;
+  // Scoreboard stays at the TOP of the scene, above the goal (original position).
+  // In portrait we anchor it to the visible top of the scene and scale it up a touch
+  // so it stays legible under the zoom.
+  const cy = PORT.on ? (PORT.vy0 + (PORT.hudY - PORT.vy0) * 0.06) : SB_CY;
+  const r  = PORT.on ? SB_R * 1.25 : SB_R;
+  const gap = PORT.on ? r * 3.4 : SB_GAP;
+  const cx0 = CW/2 - gap/2;
   for (let i = 0; i < 2; i++) {
-    const cx = cx0 + i * SB_GAP, cy = SB_CY;
+    const cx = cx0 + i * gap;
     let st = "pending";
     if (G.results[i] === "goal") st = "goal";
     else if (G.results[i] === "save") st = "save";
-    ballDot(cx, cy, SB_R, st);
+    ballDot(cx, cy, r, st);
   }
 }
 function ballDot(cx, cy, r, state) {
@@ -1008,7 +1218,19 @@ function drawAimZones() {
 }
 
 let powerPhase = 0;
+
+// Portrait power bar: HORIZONTAL, centered in the middle of the HUD strip (between
+// the scoreboard at the strip's top and the guide text at its bottom).
+function portPowerRect() {
+  const stripH = PORT.vy1 - PORT.hudY;
+  const w = (PORT.cx1 - PORT.cx0) * 0.72;      // ~72% of the visible crop width
+  const h = stripH * 0.18;
+  const x = CW / 2 - w / 2;
+  const y = PORT.hudY + stripH * 0.46 - h / 2; // vertically centered in the strip
+  return { x, y, w, h };
+}
 function drawPowerBar() {
+  if (PORT.on) { drawPowerBarH(); return; }
   // frame
   ctx.fillStyle = "rgba(10,16,40,0.8)";
   roundRect(PB_X - 10, PB_Y0 - 46, PB_W + 20, (PB_Y1 - PB_Y0) + 62, 18); ctx.fill();
@@ -1030,6 +1252,31 @@ function drawPowerBar() {
   ctx.fillStyle = YELLOW;
   ctx.beginPath();
   ctx.moveTo(PB_X - 16, my - 16); ctx.lineTo(PB_X - 40, my); ctx.lineTo(PB_X - 16, my + 16);
+  ctx.closePath(); ctx.fill();
+}
+// Portrait: horizontal power meter in the HUD strip. Left(green,low) -> right(red,high).
+function drawPowerBarH() {
+  const R = portPowerRect();
+  const lbl = Math.round(R.h * 0.6);           // label height
+  const ov  = R.h * 0.5;                        // marker vertical overshoot
+  // frame + label
+  ctx.fillStyle = "rgba(10,16,40,0.82)";
+  roundRect(R.x - 14, R.y - lbl - 14, R.w + 28, R.h + lbl + 26, 16); ctx.fill();
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 5;
+  roundRect(R.x - 14, R.y - lbl - 14, R.w + 28, R.h + lbl + 26, 16); ctx.stroke();
+  outlineText("PWR", CW / 2, R.y - lbl * 0.5, lbl, YELLOW, 3, NAVY);
+  // gradient green(left) -> yellow -> red(right)
+  const grad = ctx.createLinearGradient(R.x, 0, R.x + R.w, 0);
+  grad.addColorStop(0, "#3cd25a"); grad.addColorStop(0.5, "#ffde3d"); grad.addColorStop(1, "#e83c3c");
+  ctx.fillStyle = grad; ctx.fillRect(R.x, R.y, R.w, R.h);
+  // oscillating marker
+  const p = oscValue();
+  const mx = R.x + R.w * p;
+  ctx.fillStyle = WHITE; ctx.fillRect(mx - 10, R.y - ov, 20, R.h + ov * 2);
+  ctx.strokeStyle = NAVY; ctx.lineWidth = 4; ctx.strokeRect(mx - 10, R.y - ov, 20, R.h + ov * 2);
+  ctx.fillStyle = YELLOW;
+  ctx.beginPath();
+  ctx.moveTo(mx - 18, R.y - ov); ctx.lineTo(mx, R.y - ov - 26); ctx.lineTo(mx + 18, R.y - ov);
   ctx.closePath(); ctx.fill();
 }
 function oscValue() {
@@ -1201,7 +1448,7 @@ function drawFeedback() {
     ctx.save();
     ctx.globalAlpha = flash * 0.35;
     ctx.fillStyle = goal ? "#2fbf4f" : "#d23a3a";
-    ctx.fillRect(0, 0, CW, CH);
+    fillViewport();
     ctx.restore();
   }
 
@@ -1299,13 +1546,19 @@ function drawPrizeIcon(cx, cy, kind, iconR) {
   }
 }
 
-// PLAY AGAIN button rect (shared by draw + hit test)
+// PLAY AGAIN button rect (shared by draw + hit test). Must mirror drawResult()'s
+// portrait/landscape layout so the tap hotspot lines up with the drawn button.
 function resultButtonRect() {
   const st = RESULT_STATES[G.score] || RESULT_STATES[1];
   const nP = st.prizes.length;
-  const pw = CW*0.70, ph = CH*(0.22 + 0.135*nP);
-  const py = (nP < 3 ? CH*0.30 : CH*0.285);
-  const bw = CW*0.28, bh = CH*0.08, bx = (CW-bw)/2, by = py + ph + CH*0.03;
+  const P = PORT.on;
+  const top = P ? PORT.vy0 : 0;
+  const U   = P ? (PORT.vy1 - PORT.vy0) : CH;
+  const pw = P ? CW*0.84 : CW*0.70;
+  const ph = P ? U*(0.30 + 0.15*nP) : CH*(0.22 + 0.135*nP);
+  const py = P ? (top + U*0.375) : (nP < 3 ? CH*0.30 : CH*0.285);
+  const bw = P ? CW*0.44 : CW*0.28, bh = P ? U*0.095 : CH*0.08;
+  const bx = (CW-bw)/2, by = py + ph + U*0.035;
   return { bx, by, bw, bh, pw, ph, py };
 }
 
@@ -1315,19 +1568,26 @@ function drawResult() {
   const t = G.t;
 
   // backdrop = stadium/trophy (reuse title bg), dimmed like the mockup
-  drawImageFill(IMG.title_bg, 0, 0, CW, CH);
-  ctx.fillStyle = "rgba(6,10,30,0.42)"; ctx.fillRect(0, 0, CW, CH);
+  drawBgCover(IMG.title_bg);
+  ctx.fillStyle = "rgba(6,10,30,0.42)"; fillViewport();
 
   // opening flash
-  if (t < 350) { ctx.save(); ctx.globalAlpha = (1 - t/350) * 0.5; ctx.fillStyle = "#fff"; ctx.fillRect(0,0,CW,CH); ctx.restore(); }
+  if (t < 350) { ctx.save(); ctx.globalAlpha = (1 - t/350) * 0.5; ctx.fillStyle = "#fff"; fillViewport(); ctx.restore(); }
+
+  // Portrait uses the taller square: anchor the layout to the visible band and
+  // scale everything up so the headline, score and (especially) the prize box fill
+  // the frame. `U` is a vertical unit = full visible height; `top` is its origin.
+  const P = PORT.on;
+  const top = P ? PORT.vy0 : 0;
+  const U   = P ? (PORT.vy1 - PORT.vy0) : CH;   // vertical extent to lay out within
 
   // ---- headline (punch-in) ----
   const hP = Math.min(1, Math.max(0, (t - R_HEAD) / 300));
   if (hP > 0) {
     const sc = 0.6 + 0.4 * easeOutBack(hP);
     ctx.save(); ctx.globalAlpha = Math.min(1, hP*1.5);
-    ctx.translate(CW/2, CH*0.095); ctx.scale(sc, sc);
-    outlineText(st.headline, 0, 0, Math.round(CH*0.11), YELLOW, 7, NAVY);
+    ctx.translate(CW/2, top + U*(P?0.115:0.095)); ctx.scale(sc, sc);
+    outlineText(st.headline, 0, 0, Math.round(U*(P?0.14:0.11)), YELLOW, 7, NAVY);
     ctx.restore();
   }
 
@@ -1335,18 +1595,20 @@ function drawResult() {
   const dP = Math.min(1, Math.max(0, (t - R_DOTS) / 400));
   if (dP > 0) {
     ctx.save(); ctx.globalAlpha = dP;
-    outlineText("SKOR KAMU:  " + G.score + " / 2", CW/2, CH*0.205, Math.round(CH*0.05), WHITE, 5, NAVY);
+    outlineText("SKOR KAMU:  " + G.score + " / 2", CW/2, top + U*(P?0.24:0.205), Math.round(U*(P?0.055:0.05)), WHITE, 5, NAVY);
     ctx.restore();
-    const r = CH*0.022, gap = r*3.4, cy = CH*0.265, cx0 = CW/2 - gap/2;
+    const r = U*(P?0.028:0.022), gap = r*3.4, cy = top + U*(P?0.31:0.265), cx0 = CW/2 - gap/2;
     for (let i = 0; i < 2; i++) {
       const da = Math.min(1, Math.max(0, (t - (R_DOTS + i*140)) / 260));
       if (da > 0) ballDotResult(cx0 + i*gap, cy, r, st.dots[i], easeOutBack(da));
     }
   }
 
-  // ---- prize panel (scale-in) ----
-  const pw = CW*0.70, ph = CH*(0.22 + 0.135*nP), px = (CW-pw)/2;
-  const py = (nP < 3 ? CH*0.30 : CH*0.285);
+  // ---- prize panel (scale-in) — bigger + repositioned in portrait ----
+  const pw = P ? CW*0.84 : CW*0.70;
+  const ph = P ? U*(0.30 + 0.15*nP) : CH*(0.22 + 0.135*nP);
+  const px = (CW-pw)/2;
+  const py = P ? (top + U*0.375) : (nP < 3 ? CH*0.30 : CH*0.285);
   const paP = Math.min(1, Math.max(0, (t - R_PANEL) / 320));
   if (paP > 0 && nP > 0) {
     const psc = 0.7 + 0.3 * easeOutBack(paP);
@@ -1390,8 +1652,9 @@ function drawResult() {
       ctx.restore();
       // prize icon
       drawPrizeIcon(icx, ry, st.prizes[i][1], iconR);
-      // label (auto-shrink to fit remaining width)
-      let fsz = Math.round(iconR*0.85);
+      // label (auto-shrink to fit remaining width). Start a bit smaller in portrait so
+      // the name isn't cramped against the icon / panel edge.
+      let fsz = Math.round(iconR*(P?0.62:0.85));
       ctx.textAlign = "left"; ctx.textBaseline = "middle";
       ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif";
       while (ctx.measureText(st.prizes[i][0]).width > maxW && fsz > 12) { fsz -= 2; ctx.font = "900 " + fsz + "px 'Arial Black', Arial, sans-serif"; }
@@ -1412,14 +1675,14 @@ function drawResult() {
   // ---- footer: replay (only on a 0-goal miss) OR claim instructions (any prize) ----
   // Replay is offered exactly once, and only when the player scored nothing.
   const canReplay = (G.score === 0 && !G.replayed);
-  const bw = CW*0.28, bh = CH*0.08, bx = (CW-bw)/2, by = py + ph + CH*0.03;
+  const bw = P ? CW*0.44 : CW*0.28, bh = P ? U*0.095 : CH*0.08, bx = (CW-bw)/2, by = py + ph + U*0.035;
   const btnP = Math.min(1, Math.max(0, (t - (allRowsAt + R_BTN_AFTER)) / 320));
   if (btnP > 0) {
     ctx.save(); ctx.globalAlpha = btnP;
     if (canReplay) {
       // encouraging line above the button
-      outlineText("Kamu punya 1 kesempatan lagi!", CW/2, by - CH*0.055,
-        Math.round(CH*0.042), YELLOW, 5, NAVY);
+      outlineText("Kamu punya 1 kesempatan lagi!", CW/2, by - U*(P?0.06:0.055),
+        Math.round(U*(P?0.045:0.042)), YELLOW, 5, NAVY);
       const bp = 1 + Math.sin(animClock/300) * 0.02;   // gentle pulse to invite the tap
       ctx.save();
       ctx.translate(CW/2, by+bh/2); ctx.scale(bp, bp); ctx.translate(-CW/2, -(by+bh/2));
@@ -1429,9 +1692,22 @@ function drawResult() {
       ctx.restore();
     } else {
       // Won a prize (or replay already used): show how to claim it. No button.
+      // Smaller text in portrait, and anchor its FIRST line clearly below the panel so
+      // the wrapped block never overlaps the box.
       const claim = "Klaim hadiahmu dengan menunjukkan hasil ini ke Admission Counselor kamu.";
-      const cy = by + bh*0.4, cw = pw, csz = Math.round(CH*0.038);
-      wrapOutlineText(claim, CW/2, cy, cw, csz*1.35, csz, YELLOW, 5, NAVY);
+      const csz = Math.round(U*(P?0.030:0.038));
+      const lineH = csz*1.3;
+      const cw = pw*0.90;
+      // Count how many lines this wraps to, so we can place the block's CENTER such that
+      // its TOP line clears the panel bottom by a fixed gap (no overlap, any line count).
+      ctx.font = "900 " + csz + "px 'Arial Black', Arial, sans-serif";
+      const words = claim.split(" "); let ln = "", nLines = 1;
+      for (const wd of words) { const test = ln ? ln+" "+wd : wd;
+        if (ctx.measureText(test).width > cw && ln) { nLines++; ln = wd; } else ln = test; }
+      const gapBelow = U*0.06;
+      const blockTop = (py + ph) + gapBelow;            // where the first line should sit
+      const cy = blockTop + (nLines - 1) * lineH / 2;   // center so top line == blockTop
+      wrapOutlineText(claim, CW/2, cy, cw, lineH, csz, YELLOW, 5, NAVY);
     }
     ctx.restore();
   }
@@ -1454,8 +1730,14 @@ function roundRect(x, y, w, h, r) {
 function scanlines() {
   ctx.save();
   ctx.globalAlpha = 0.06; ctx.fillStyle = "#000";
-  for (let y = 0; y < CH; y += 4) ctx.fillRect(0, y, CW, 2);
+  const y0 = PORT.on ? PORT.vy0 : 0, y1 = PORT.on ? PORT.vy1 : CH;
+  for (let y = y0; y < y1; y += 4) ctx.fillRect(0, y, CW, 2);
   ctx.restore();
+}
+// Full-viewport rect covering the bands too (for flashes / dim overlays in portrait).
+function fillViewport() {
+  const y0 = PORT.on ? PORT.vy0 : 0, h = PORT.on ? (PORT.vy1 - PORT.vy0) : CH;
+  ctx.fillRect(0, y0, CW, h);
 }
 
 /* ============================================================
@@ -1593,7 +1875,27 @@ function update(dt) {
    RENDER dispatch
    ============================================================ */
 function render(dt) {
-  ctx.clearRect(0, 0, CW, CH);
+  if (PORT.on) {
+    // Recompute the per-screen camera each frame (screen may have changed), then
+    // apply it: native crop rect -> square. Everything downstream draws in native.
+    recomputeCam();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, PORT.side, PORT.side);
+    ctx.setTransform(PORT.scale, 0, 0, PORT.scale, PORT.ox, PORT.oy);
+    // Gameplay: fill exposed sky above the scene, and paint the bottom HUD strip
+    // (below hudY) navy — that strip holds the power bar + help text.
+    if (G.screen === "aim" || G.screen === "power" || G.screen === "shooting" || G.screen === "feedback") {
+      if (PORT.vy0 < 0) { ctx.fillStyle = "#3aa0e8"; ctx.fillRect(PORT.cx0, PORT.vy0, PORT.cx1 - PORT.cx0, -PORT.vy0); }
+      // any grass gap between the scene bottom and the HUD strip
+      if (PORT.hudY > CH) { ctx.fillStyle = "#2f7d1e"; ctx.fillRect(PORT.cx0, CH, PORT.cx1 - PORT.cx0, PORT.hudY - CH); }
+      // HUD strip background (navy) spanning the full visible width
+      ctx.fillStyle = "#0b1230";
+      ctx.fillRect(PORT.cx0, PORT.hudY, PORT.cx1 - PORT.cx0, PORT.vy1 - PORT.hudY);
+    }
+  } else {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, CW, CH);
+  }
   switch (G.screen) {
     case "title":    drawTitle(dt); break;
     case "select":   drawSelect(); break;
@@ -1609,12 +1911,25 @@ function render(dt) {
 
 // Always-visible RevoU logo, top-left — just the logo, no frame (like the country-select
 // scene). Skipped on "select" — that backdrop already has the RevoU logo baked in.
+// Anchored to the VISIBLE top-left corner: in portrait the camera crop's top-left is
+// not native (0,0), so we place it at (cx0, vy0) to keep it consistently in the corner.
 function drawRevouBadge() {
-  if (G.screen === "select") return;
+  // Landscape select has the logo baked into its backdrop; portrait select draws
+  // its own grid (no baked logo), so show the badge there.
+  if (G.screen === "select" && !PORT.on) return;
   const im = IMG.revou; if (!im || !im.width) return;
-  const s = CW * 0.055;                          // logo size
-  const pad = CW * 0.018;
-  ctx.drawImage(im, pad, pad, s, s);
+  // The badge is drawn INSIDE the active camera, so its on-screen size = s*PORT.scale.
+  // Camera scale differs per screen (gameplay is zoomed ~1.47x, composed screens ~1x),
+  // which made the logo look bigger on the pitch. To keep a CONSTANT on-screen size in
+  // portrait, divide the native size/padding by PORT.scale so s*scale is invariant. The
+  // target on-screen size matches the (liked) gameplay badge: CW*0.055 at the gameplay
+  // zoom of 1/0.68 -> ~CW*0.081 on-screen.
+  const SCREEN_S = CW * 0.081, SCREEN_PAD = CW * 0.026;   // desired on-screen (square px) size
+  const s   = PORT.on ? SCREEN_S   / PORT.scale : CW * 0.055;
+  const pad = PORT.on ? SCREEN_PAD / PORT.scale : CW * 0.018;
+  const x0 = PORT.on ? PORT.cx0 : 0;
+  const y0 = PORT.on ? PORT.vy0 : 0;
+  ctx.drawImage(im, x0 + pad, y0 + pad, s, s);
 }
 
 /* ============================================================
@@ -1634,6 +1949,13 @@ function loop(ts) {
    ============================================================ */
 function canvasPos(clientX, clientY) {
   const r = canvas.getBoundingClientRect();
+  if (PORT.on) {
+    // square canvas: client -> square px -> native. Invert the camera transform
+    //   squarePx = native*scale + offset   =>   native = (squarePx - offset)/scale
+    const px = (clientX - r.left) / r.width  * PORT.side;
+    const py = (clientY - r.top)  / r.height * PORT.side;
+    return { x: (px - PORT.ox) / PORT.scale, y: (py - PORT.oy) / PORT.scale };
+  }
   return {
     x: (clientX - r.left) / r.width * CW,
     y: (clientY - r.top) / r.height * CH,
@@ -1648,7 +1970,9 @@ function zoneAt(x, y) {
   return -1;
 }
 function rectAt(x, y) {
-  for (const r of SELECT_RECTS) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+  // Portrait uses the live 3x4 grid; landscape uses the baked-backdrop rects.
+  const rects = PORT.on ? computeSelectGridPortrait() : SELECT_RECTS;
+  for (const r of rects) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
   return null;
 }
 
@@ -1736,6 +2060,29 @@ function fitCanvas() {
   // Leave a small margin so the framed canvas floats inside the navy backdrop.
   const pad = Math.round(Math.min(vw, vh) * 0.03);
   const availW = vw - pad * 2, availH = vh - pad * 2;
+
+  // Portrait phones: render into a SQUARE that fills the width, instead of a thin
+  // landscape strip. The 1.79:1 art is fitted by width and vertically centered.
+  const portrait = isMobile() && window.matchMedia("(orientation: portrait)").matches;
+  if (portrait) {
+    const side = Math.min(availW, availH);   // biggest square that fits (CSS px)
+    PORT.on = true;
+    // Backing store = square at native width resolution for crisp art.
+    canvas.width = CW;
+    canvas.height = CW;                       // square backing store (CW x CW)
+    ctx.imageSmoothingEnabled = false;        // reassigning w/h resets ctx state
+    canvas.style.width = side + "px";
+    canvas.style.height = side + "px";
+    // Camera math works in backing-store px, so side == CW. canvasPos() scales the
+    // CSS rect back to this same square, so the ratio stays correct.
+    PORT.side = CW;
+    recomputeCam();
+    return;
+  }
+
+  PORT.on = false;
+  canvas.width = CW; canvas.height = CH;      // restore native backing store
+  ctx.imageSmoothingEnabled = false;
   const scale = Math.min(availW / CW, availH / CH);
   const w = CW * scale, h = CH * scale;
   canvas.style.width = w + "px";
@@ -1769,14 +2116,15 @@ let wasPortrait = null;
 function checkOrientation() {
   const portrait = window.matchMedia("(orientation: portrait)").matches;
   const inPortrait = isMobile() && portrait;
-  // Persistent hints live in the letterbox space when the user stays portrait.
-  phintTop.classList.toggle("show", inPortrait);
-  phintBot.classList.toggle("show", inPortrait);
-  // Toast only on the transition into portrait (or first load in portrait).
+  // Portrait is now a first-class square layout — no letterbox to fill, so the
+  // persistent hints stay hidden. Landscape is still (mildly) nicer, so we flash
+  // a one-time, non-blocking toast on the first entry into portrait.
+  phintTop.classList.remove("show");
+  phintBot.classList.remove("show");
   if (inPortrait && wasPortrait !== true) flashRotateToast();
   if (!inPortrait) rotateEl.classList.remove("show");
   wasPortrait = inPortrait;
-  // Note: the game is never paused for orientation — landscape is only a recommendation.
+  // Note: the game is never paused for orientation — both modes are fully playable.
 }
 window.addEventListener("resize", () => { fitCanvas(); checkOrientation(); });
 window.addEventListener("orientationchange", () => { setTimeout(() => { fitCanvas(); checkOrientation(); }, 100); });
